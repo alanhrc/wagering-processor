@@ -9,6 +9,7 @@ export default defineConfig({
   port: Number(process.env.DB_POSTGRES_PORT) || 5436,
   user: process.env.DB_POSTGRES_USER || 'postgres',
   password: process.env.DB_POSTGRES_PASSWORD || 'postgres',
+  schema: process.env.DB_POSTGRES_SCHEMA,
   metadataProvider: TsMorphMetadataProvider,
   migrations: {
     path: './src/modules/wagering/infrastructure/persistence/migrations',

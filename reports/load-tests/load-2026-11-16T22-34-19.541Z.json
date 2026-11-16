@@ -1,0 +1,65 @@
+{
+  "generatedAt": "2026-11-16T22:34:19.541Z",
+  "environment": {
+    "runtime": "Bun 1.4.4",
+    "platform": "darwin/arm64",
+    "cpuCount": 12,
+    "memoryBytes": 90702736,
+    "postgresHost": "localhost",
+    "postgresPort": 5436,
+    "postgresDatabase": "wagering_db",
+    "schema": "wagering_load_af5b669e1f884fd19e8459154adb352f",
+    "schemaRetained": true,
+    "sqsEndpointHost": "localhost",
+    "queueNames": {
+      "deadLetter": "wager-load-dlq-6cfc6d3f87cf4f3c83cf33b916c57fc4.fifo",
+      "wagers": "wager-load-input-6cfc6d3f87cf4f3c83cf33b916c57fc4.fifo",
+      "events": "wager-load-events-6cfc6d3f87cf4f3c83cf33b916c57fc4.fifo"
+    }
+  },
+  "methodology": {
+    "endpoint": "POST /wagering/transactions",
+    "operation": "LOSS of 0.01 BRL per request against one shared wallet",
+    "authentication": "One registered user and one JWT bearer token",
+    "idempotency": "Unique Idempotency-Key per measured request",
+    "requests": 500,
+    "warmupRequests": 10,
+    "concurrency": 25,
+    "note": "This is a local benchmark; the challenge defines no target RPS."
+  },
+  "results": {
+    "completed": 500,
+    "succeeded": 500,
+    "failed": 0,
+    "errorRate": 0,
+    "throughputRequestsPerSecond": 678.5310839371082,
+    "durationMs": 736.8859170000001,
+    "latencyMs": {
+      "p50": 34.11545799999999,
+      "p95": 50.82687499999997,
+      "p99": 70.74849999999992,
+      "min": 15.707292000000052,
+      "max": 81.32395799999995
+    },
+    "statusCounts": {
+      "200": 500
+    },
+    "sampleErrors": [],
+    "databaseLockConflictDelta": 0,
+    "outboxLagSeconds": {
+      "before": 0.078725,
+      "maximumSampled": 0.528059,
+      "after": 0.717719
+    },
+    "reconciliation": {
+      "httpStatus": 200,
+      "consistent": true,
+      "checkedEntries": 1
+    }
+  },
+  "cleanup": {
+    "schemaDropped": false,
+    "queuesDeleted": true,
+    "applicationStopped": true
+  }
+}

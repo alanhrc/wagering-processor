@@ -209,10 +209,15 @@ test/
 | `bun run test` | Money, validações, invariantes de Wallet, transições de WagerTransaction e formatação das métricas. |
 | `bun run test:e2e` | Rotas HTTP, contratos e status 200/202/400/404/409/422, health checks, métricas e Swagger. |
 | `bun run test:integration` | PostgreSQL e LocalStack: migrations e constraints, atomicidade, inbox/outbox, retries, DLQ, redelivery, reinício e reconciliação. Inclui 50 entregas simultâneas, disputa por saldo, wallets diferentes e três processos Bun independentes. |
+| `LOAD_TEST_CONFIRM_LOCAL=YES DB_POSTGRES_HOST=localhost bun run test:load` | Benchmark HTTP contra uma instância local, com métricas de desempenho e reconciliação final; gera relatório JSON em `reports/load-tests/`. |
 | `bun run build` | Compilação TypeScript/NestJS. |
 | `bun run lint` | Regras estáticas em `src/` e `test/`. |
 
 Os testes de integração criam um schema isolado. `KEEP_TEST_SCHEMA=true` mantém o schema e seus dados para auditoria; `false` remove o schema ao terminar.
+
+O teste de carga exige `LOAD_TEST_CONFIRM_LOCAL=YES` e só aceita PostgreSQL e SQS em hosts locais. Use `DB_POSTGRES_HOST=localhost` se seu `.env` usar `0.0.0.0` para bind local. Cria um schema e filas temporários exclusivos, inicia sua própria instância HTTP e remove as filas e o processo ao terminar. O schema segue `KEEP_TEST_SCHEMA`. Configure `LOAD_TEST_REQUESTS`, `LOAD_TEST_CONCURRENCY` e `LOAD_TEST_WARMUP_REQUESTS`; o relatório registra ambiente, método, throughput, p50/p95/p99, taxa de erro, conflitos de lock observados pela métrica e atraso amostrado da outbox. Como o desafio não define meta de RPS, os resultados são uma baseline deste ambiente local.
+
+Baseline registrada: 500 operações medidas, concorrência 25, 678,5 req/s, p50 34,1 ms, p95 50,8 ms, p99 70,7 ms, 0% de erros, delta de conflitos PostgreSQL igual a zero e reconciliação consistente. A outbox chegou a 0,528 s de atraso amostrado e estava em 0,718 s na coleta imediatamente após a carga. Esse resultado não estima capacidade de produção; o JSON inclui hardware, runtime e configuração usados: [relatório da execução](reports/load-tests/load-2026-11-16T22-34-19.541Z.json).
 
 ## Logs e métricas
 
