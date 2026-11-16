@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Headers, HttpCode, HttpStatus, HttpException, Get, Param, NotFoundException, InternalServerErrorException, Logger, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Headers, HttpCode, HttpStatus, HttpException, Get, Param, NotFoundException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import {
   IdempotencyKeyConflictError,
@@ -18,7 +18,6 @@ import { InvalidWagerAmountError } from '../../domain/entities/wager-transaction
 import { hashWagerPayload } from '../../application/hash-wager-payload';
 import { InvalidMoneyError } from '../../../../shared/domain/value-objects/money';
 import { WageringMetrics } from '../../../../shared/infrastructure/observability/wagering-metrics';
-import { ProviderIdentityGuard } from '../../../../shared/infrastructure/auth/provider-identity.guard';
 import {
   GetWagerTransactionUseCase,
   WagerTransactionNotFoundError,
@@ -30,6 +29,7 @@ import {
   ApiParam,
   ApiResponse,
   ApiTags,
+  ApiBearerAuth,
 } from '@nestjs/swagger';
 
 type WagerRequestBody = Omit<ProcessWagerCommand, 'idempotencyKey' | 'payloadHash' | 'correlationId'>;
@@ -79,7 +79,7 @@ function isWagerRequestBody(value: unknown): value is WagerRequestBody {
 }
 
 @ApiTags('Wagering')
-@UseGuards(ProviderIdentityGuard)
+@ApiBearerAuth()
 @Controller('wagering')
 export class WageringController {
   private readonly logger = new Logger(WageringController.name);

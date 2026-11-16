@@ -11,7 +11,6 @@ import {
   Param,
   Post,
   Query,
-  UseGuards,
 } from '@nestjs/common';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { CreateWalletUseCase } from '../../application/use-cases/create-wallet.use-case';
@@ -30,8 +29,8 @@ import {
   ApiQuery,
   ApiResponse,
   ApiTags,
+  ApiBearerAuth,
 } from '@nestjs/swagger';
-import { ProviderIdentityGuard } from '../../../../shared/infrastructure/auth/provider-identity.guard';
 import { WageringMetrics } from '../../../../shared/infrastructure/observability/wagering-metrics';
 
 function isCreateWalletCommand(value: unknown): value is CreateWalletCommand {
@@ -50,7 +49,7 @@ function isCreateWalletCommand(value: unknown): value is CreateWalletCommand {
 }
 
 @ApiTags('Wallets')
-@UseGuards(ProviderIdentityGuard)
+@ApiBearerAuth()
 @Controller('wallets')
 export class WalletController {
   private readonly logger = new Logger(WalletController.name);

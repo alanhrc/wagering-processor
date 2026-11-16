@@ -21,7 +21,8 @@ import { WageringController } from '../src/modules/wagering/presentation/http/wa
 import { WalletController } from '../src/modules/wagering/presentation/http/wallet.controller';
 import { MetricsController } from '../src/modules/wagering/presentation/http/metrics.controller';
 import { WageringMetrics } from '../src/shared/infrastructure/observability/wagering-metrics';
-import { ProviderIdentityGuard } from '../src/shared/infrastructure/auth/provider-identity.guard';
+import { AuthController } from '../src/modules/authentication/presentation/http/auth.controller';
+import { AuthenticateUserUseCase, RegisterUserUseCase } from '../src/modules/authentication/application/authentication.use-cases';
 
 describe('Wagering HTTP routes (e2e)', () => {
   let app: INestApplication;
@@ -36,7 +37,7 @@ describe('Wagering HTTP routes (e2e)', () => {
 
   beforeAll(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [WalletController, WageringController, ProviderWageringController, HealthController, MetricsController],
+      controllers: [AuthController, WalletController, WageringController, ProviderWageringController, HealthController, MetricsController],
       providers: [
         { provide: CreateWalletUseCase, useValue: createWallet },
         { provide: ReconcileWalletUseCase, useValue: reconcileWallet },
@@ -46,7 +47,8 @@ describe('Wagering HTTP routes (e2e)', () => {
         { provide: EntityManager, useValue: { config: { getSchema: () => undefined }, getConnection: () => postgresConnection } },
         { provide: SQSClient, useValue: sqsClient },
         WageringMetrics,
-        ProviderIdentityGuard,
+        { provide: RegisterUserUseCase, useValue: { execute: vi.fn() } },
+        { provide: AuthenticateUserUseCase, useValue: { execute: vi.fn() } },
       ],
     }).compile();
 

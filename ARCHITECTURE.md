@@ -15,7 +15,7 @@ The service processes provider wager operations while keeping the wallet balance
 
 ## Money representation
 
-`Money` stores exact decimal values and serializes `amount` as a fixed two-decimal string. Persistence stores integer minor units alongside the currency. JavaScript `number` is not used for monetary arithmetic. The model accepts currencies, while the challenge examples and local workflows use BRL.
+`Money` stores amounts as integer cents in a `bigint` and serializes `amount` as a fixed two-decimal string. PostgreSQL stores the persisted amount in `NUMERIC(15, 2)` columns. JavaScript `number` is not used for monetary arithmetic. The model accepts currencies, while the challenge examples and local workflows use BRL.
 
 ## Wallet consistency and concurrency
 
@@ -58,7 +58,11 @@ The local queues are created by `scripts/localstack/init-sqs.sh`. The input FIFO
 
 ## Authentication decision
 
-Authentication is intentionally not implemented because the challenge assigns it no points. `ProviderIdentityGuard` is applied to business controllers and currently allows requests; it marks the code location where an OIDC/identity-provider integration can be added. Health and metrics endpoints are open. The SQS channel is treated as internal, while provider identity fields still pass domain validation.
+The challenge says authentication earns no points and recommends an external identity provider instead of a custom users table. A small first-party flow was added for learning and API usability: `AuthenticationModule` separates HTTP DTOs/controller, application use cases, domain ports, and infrastructure adapters. `Argon2PasswordHasher` stores only Argon2id hashes in `auth_users`; `JwtAccessTokenIssuer` returns a 15-minute bearer token. `AccessTokenGuard` is registered globally and lets through only handlers marked with `@Public()` (registration, login, liveness/readiness, and metrics). Swagger documents the bearer scheme.
+
+`AUTH_SEED_EMAIL` and `AUTH_SEED_PASSWORD` are optional and must be supplied together. The startup seeder hashes the password and creates the account only if the normalized email is absent. It does not overwrite an existing account's password. `JWT_SECRET` is required and must have at least 32 characters; rotating it invalidates outstanding access tokens.
+
+This implementation authenticates a user but does not authorize access to a particular provider, player, or wallet. Public self-registration has no email verification or rate limit; there is no refresh token, logout/revocation, password reset, or OIDC integration. Every authenticated account can reach all protected business endpoints. Treat it as a challenge/demo implementation, not production identity management. A production design should delegate identity to OIDC (for example Keycloak/Zitadel or a managed provider), validate provider/client claims, and apply tenant/ownership policies at every resource boundary. Queue messages remain an internal channel and still undergo domain validation.
 
 ## Observability
 

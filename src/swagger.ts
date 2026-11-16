@@ -6,6 +6,7 @@ export function configureSwagger(app: INestApplication): void {
     .setTitle('Distributed Wagering Processor API')
     .setDescription('HTTP API for wallets, wager transactions, ledger queries, and service health.')
     .setVersion('1.0.0')
+    .addBearerAuth()
     .build();
 
   const document = SwaggerModule.createDocument(app, config);

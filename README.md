@@ -17,7 +17,7 @@ API financeira para processar operações de apostas com valores exatos, ledger 
    test -f .env || cp .env.example .env
    ```
 
-   Os valores do exemplo atendem ao ambiente local. Se sua distribuição do LocalStack exigir autenticação, informe seu token em `LOCALSTACK_AUTH_TOKEN` no `.env`.
+   Configure `JWT_SECRET` com pelo menos 32 caracteres aleatórios. Para criar um usuário inicial automaticamente, preencha também `AUTH_SEED_EMAIL` e `AUTH_SEED_PASSWORD` (mínimo de 12 caracteres). Se sua distribuição do LocalStack exigir autenticação, informe seu token em `LOCALSTACK_AUTH_TOKEN`.
 
 3. Instale as dependências:
 
@@ -48,6 +48,8 @@ API financeira para processar operações de apostas com valores exatos, ledger 
    bun run migration:up
    ```
 
+   A migration `Migration20261119000000` cria `auth_users` com e-mail único e hash de senha. Com as variáveis `AUTH_SEED_*` definidas, a aplicação cria o usuário inicial ao iniciar; a senha nunca é gravada em texto puro e um usuário já existente não tem sua senha alterada pelo seed.
+
 6. Inicie a API em modo de desenvolvimento:
 
    ```bash
@@ -74,12 +76,33 @@ Para encerrar a aplicação, pare o processo iniciado no terminal. Para parar os
 docker compose down
 ```
 
+## Autenticar e usar a API
+
+Cadastro e login são públicos. O cadastro retorna um JWT de acesso com validade de 15 minutos:
+
+```bash
+curl --request POST http://localhost:3000/auth/register \
+  --header 'content-type: application/json' \
+  --data '{"email":"alan@example.com","password":"correct-horse-battery-staple"}'
+```
+
+Para entrar com uma conta existente (inclusive o usuário inicial do `.env`), chame `POST /auth/login`:
+
+```bash
+curl --request POST http://localhost:3000/auth/login \
+  --header 'content-type: application/json' \
+  --data '{"email":"alan@example.com","password":"correct-horse-battery-staple"}'
+```
+
+Copie `accessToken` e use o botão **Authorize** do Swagger com o token; as rotas de negócio exigem `Authorization: Bearer <token>`. `POST /auth/session` demonstra a validação do token. Health e métricas continuam públicos.
+
 ## Exemplo rápido de uso da API
 
 Crie uma wallet e use o `id` retornado na próxima requisição:
 
 ```bash
 curl --request POST http://localhost:3000/wallets \
+  --header 'Authorization: Bearer <access-token>' \
   --header 'content-type: application/json' \
   --data '{
     "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
@@ -91,6 +114,7 @@ Envie uma aposta usando o `walletId` retornado:
 
 ```bash
 curl --request POST http://localhost:3000/wagering/transactions \
+  --header 'Authorization: Bearer <access-token>' \
   --header 'content-type: application/json' \
   --header 'Idempotency-Key: provider-a:transaction-123' \
   --header 'X-Correlation-Id: local-request-123' \
@@ -110,6 +134,9 @@ curl --request POST http://localhost:3000/wagering/transactions \
 
 | Método | Rota | Uso |
 |---|---|---|
+| `POST` | `/auth/register` | Cadastra usuário e retorna token de acesso. |
+| `POST` | `/auth/login` | Valida senha e retorna token de acesso. |
+| `POST` | `/auth/session` | Valida o bearer token e retorna o sujeito autenticado. |
 | `POST` | `/wallets` | Cria wallet; saldo inicial positivo gera transação `OPENING` e crédito no ledger. |
 | `GET` | `/wallets/:walletId` | Consulta saldo e versão da wallet. |
 | `GET` | `/wallets/:walletId/ledger` | Consulta ledger com cursor estável. |
@@ -159,9 +186,14 @@ src/
 │   ├── domain/            # Entidades, regras, eventos e portas
 │   ├── infrastructure/    # MikroORM, PostgreSQL, SQS, inbox/outbox e workers
 │   └── presentation/http/ # Controllers, health e métricas
+├── modules/authentication/
+│   ├── application/       # Cadastro, login e seed inicial
+│   ├── domain/            # Usuário e portas de autenticação
+│   ├── infrastructure/    # Argon2id, JWT e PostgreSQL
+│   └── presentation/http/ # Rotas públicas e DTOs de autenticação
 ├── shared/
 │   ├── domain/            # Money e tipos compartilhados
-│   └── infrastructure/    # Guard de extensão e métricas
+│   └── infrastructure/    # Guard JWT, logger e métricas
 └── main.ts                # Bootstrap, logger JSON e Swagger
 scripts/localstack/        # Criação das filas locais
 test/
@@ -191,6 +223,6 @@ Os testes de integração criam um schema isolado. `KEEP_TEST_SCHEMA=true` mant�
 
 ## Autenticação
 
-Autenticação real não foi implementada porque não vale pontos neste desafio. As rotas de negócio têm `ProviderIdentityGuard` como ponto de extensão, atualmente sem bloqueio. Health checks e métricas permanecem abertos. Uma integração futura deve validar a identidade do provedor por OIDC/IdP, sem criar autenticação artesanal.
+O projeto implementa cadastro e login didáticos com Argon2id e JWT bearer de 15 minutos. A proteção global exige token, exceto nas rotas marcadas públicas (`/auth/register`, `/auth/login`, health e métricas). O cadastro público não tem verificação de e-mail nem rate limit, não há refresh/revogação de token e todos os usuários autenticados têm o mesmo acesso; portanto, este fluxo não substitui um IdP OIDC em produção nem autorização por tenant/ownership. O desafio recomenda IdP externo e não atribui pontos à autenticação; a implementação própria foi escolhida para estudo e demonstração.
 
 As decisões de locking, idempotência, retries, outbox, reversões e autenticação estão em [ARCHITECTURE.md](ARCHITECTURE.md).

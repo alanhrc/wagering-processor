@@ -19,13 +19,11 @@ import { OutboxPublisherWorker } from './infrastructure/workers/outbox-publisher
 import { PendingReferenceWorker } from './infrastructure/workers/pending-reference.worker';
 import { SqsWagerConsumerWorker } from './infrastructure/workers/sqs-wager-consumer.worker';
 import { WageringMetrics } from '../../shared/infrastructure/observability/wagering-metrics';
-import { ProviderIdentityGuard } from '../../shared/infrastructure/auth/provider-identity.guard';
 
 @Module({
   controllers: [WageringController, WalletController, ProviderWageringController, HealthController, MetricsController],
   providers: [
     WageringMetrics,
-    ProviderIdentityGuard,
     {
       provide: SQSClient,
       useFactory: () => createSqsClient(),

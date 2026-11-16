@@ -15,14 +15,15 @@ import { GetWalletQueriesUseCase } from '../src/modules/wagering/application/use
 import { ProcessWagerTransactionUseCase } from '../src/modules/wagering/application/use-cases/process-wager-transaction.use-case';
 import { GetWagerTransactionUseCase } from '../src/modules/wagering/application/use-cases/get-wager-transaction.use-case';
 import { WageringMetrics } from '../src/shared/infrastructure/observability/wagering-metrics';
-import { ProviderIdentityGuard } from '../src/shared/infrastructure/auth/provider-identity.guard';
+import { AuthController } from '../src/modules/authentication/presentation/http/auth.controller';
+import { AuthenticateUserUseCase, RegisterUserUseCase } from '../src/modules/authentication/application/authentication.use-cases';
 
 describe('OpenAPI documentation', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [WalletController, WageringController, ProviderWageringController, HealthController],
+      controllers: [AuthController, WalletController, WageringController, ProviderWageringController, HealthController],
       providers: [
         { provide: CreateWalletUseCase, useValue: {} },
         { provide: ReconcileWalletUseCase, useValue: {} },
@@ -32,7 +33,8 @@ describe('OpenAPI documentation', () => {
         { provide: EntityManager, useValue: {} },
         { provide: SQSClient, useValue: {} },
         WageringMetrics,
-        ProviderIdentityGuard,
+        { provide: RegisterUserUseCase, useValue: { execute: vi.fn() } },
+        { provide: AuthenticateUserUseCase, useValue: { execute: vi.fn() } },
       ],
     }).compile();
 
@@ -51,6 +53,9 @@ describe('OpenAPI documentation', () => {
     const paths = response.body.paths as Record<string, Record<string, unknown>>;
 
     expect(Object.keys(paths).sort()).toEqual([
+      '/auth/login',
+      '/auth/register',
+      '/auth/session',
       '/health/live',
       '/health/ready',
       '/providers/{providerId}/wagering/transactions/{externalTransactionId}',
@@ -77,6 +82,12 @@ describe('OpenAPI documentation', () => {
     expect(submitOperation.responses).toHaveProperty('409');
     expect(submitOperation.responses).toHaveProperty('202');
     expect(submitOperation.responses).toHaveProperty('422');
+
+    const registration = paths['/auth/register']?.post as { responses: Record<string, unknown> };
+    expect(registration.responses).toHaveProperty('201');
+    expect(registration.responses).toHaveProperty('409');
+    const session = paths['/auth/session']?.post as { security: Array<Record<string, string[]>> };
+    expect(session.security).toContainEqual({ bearer: [] });
 
     const reconciliationOperation = paths['/wallets/{walletId}/reconciliation']?.post as {
       responses: Record<string, { content?: { 'application/json'?: { schema?: { example?: unknown } } } }>;

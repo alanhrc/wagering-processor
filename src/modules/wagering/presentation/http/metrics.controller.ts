@@ -4,8 +4,10 @@ import { GetQueueAttributesCommand, SQSClient } from '@aws-sdk/client-sqs';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { WageringMetrics } from '../../../../shared/infrastructure/observability/wagering-metrics';
 import { qualifiedTableName } from '../../infrastructure/persistence/qualified-table-name';
+import { Public } from '../../../../shared/infrastructure/auth/access-token.guard.js';
 
 @Controller()
+@Public()
 export class MetricsController {
   private readonly dlqQueueUrl: string;
 

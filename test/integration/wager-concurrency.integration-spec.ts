@@ -18,6 +18,7 @@ import { Migration20261115000000 } from '../../src/modules/wagering/infrastructu
 import { Migration20261116000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261116000000';
 import { Migration20261117000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261117000000';
 import { Migration20261118000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261118000000';
+import { Migration20261119000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261119000000';
 
 import { PostgresWalletRepository } from '../../src/modules/wagering/infrastructure/persistence/repositories/postgres-wallet.repository';
 
@@ -72,6 +73,7 @@ describe('Wagering Concurrency & Integration Tests', () => {
           Migration20261116000000,
           Migration20261117000000,
           Migration20261118000000,
+          Migration20261119000000,
         ],
       },
     });
@@ -599,7 +601,26 @@ describe('Wagering Concurrency & Integration Tests', () => {
     try {
       await migrationOrm.em.getConnection().execute(`CREATE SCHEMA "${migrationSchema}"`);
       await migrationOrm.migrator.up({ schema: migrationSchema });
-      expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(4);
+      expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(5);
+      const authTable = await migrationOrm.em.getConnection().execute<Array<{ table_name: string }>>(
+        `SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'auth_users'`,
+        [migrationSchema],
+        'all',
+      );
+      expect(authTable).toHaveLength(1);
+      const authUserId = crypto.randomUUID();
+      await migrationOrm.em.getConnection().execute(
+        `INSERT INTO "${migrationSchema}".auth_users (id, email, password_hash) VALUES (?, ?, ?)`,
+        [authUserId, 'migration-user@example.com', 'argon2id-test-hash'],
+        'run',
+      );
+      await expect(
+        migrationOrm.em.getConnection().execute(
+          `INSERT INTO "${migrationSchema}".auth_users (id, email, password_hash) VALUES (?, ?, ?)`,
+          [crypto.randomUUID(), 'migration-user@example.com', 'argon2id-test-hash'],
+          'run',
+        ),
+      ).rejects.toThrow();
 
       await migrationOrm.migrator.down({ schema: migrationSchema, to: 0 });
       expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(0);
@@ -612,7 +633,7 @@ describe('Wagering Concurrency & Integration Tests', () => {
       expect(tablesAfterDown[0]?.count).toBe(0);
 
       await migrationOrm.migrator.up({ schema: migrationSchema });
-      expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(4);
+      expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(5);
     } finally {
       try {
         await migrationOrm.em.getConnection().execute(`DROP SCHEMA IF EXISTS "${migrationSchema}" CASCADE`);

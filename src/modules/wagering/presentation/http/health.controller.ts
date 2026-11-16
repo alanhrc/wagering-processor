@@ -7,8 +7,10 @@ import {
 import { SQSClient, GetQueueAttributesCommand } from '@aws-sdk/client-sqs';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Public } from '../../../../shared/infrastructure/auth/access-token.guard.js';
 
 @ApiTags('Health')
+@Public()
 @Controller('health')
 export class HealthController {
   private readonly logger = new Logger(HealthController.name);
