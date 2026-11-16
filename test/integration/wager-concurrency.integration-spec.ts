@@ -36,6 +36,9 @@ import { SqsEventPublisher } from '../../src/modules/wagering/infrastructure/mes
 import { OutboxPublisherWorker } from '../../src/modules/wagering/infrastructure/workers/outbox-publisher.worker';
 import { SqsWagerConsumerWorker } from '../../src/modules/wagering/infrastructure/workers/sqs-wager-consumer.worker';
 import { ReconcileWalletUseCase } from '../../src/modules/wagering/application/use-cases/reconcile-wallet.use-case';
+import { GetWalletQueriesUseCase } from '../../src/modules/wagering/application/use-cases/get-wallet-queries.use-case';
+import { GetWagerTransactionUseCase } from '../../src/modules/wagering/application/use-cases/get-wager-transaction.use-case';
+import { HealthController } from '../../src/modules/wagering/presentation/http/health.controller';
 
 describe('Wagering Concurrency & Integration Tests', () => {
   let orm: MikroORM | undefined;
@@ -460,5 +463,63 @@ describe('Wagering Concurrency & Integration Tests', () => {
 
     const storedWallet = await new PostgresWalletRepository(orm!.em.fork()).findById(wallet.id);
     expect(storedWallet?.balance.toString()).toBe('95.00');
+  });
+
+  it('should query wallets, transactions, and ledger pages with a stable cursor', async () => {
+    const playerId = crypto.randomUUID();
+    const wallet = await new CreateWalletUseCase(new PostgresUnitOfWork(orm!.em.fork())).execute({
+      playerId,
+      initialBalance: { amount: '100.00', currency: 'BRL' },
+    });
+    const externalTransactionId = crypto.randomUUID();
+    const transaction = await createUseCase().execute({
+      providerId: 'provider-a',
+      externalTransactionId,
+      idempotencyKey: `provider-a:${externalTransactionId}`,
+      payloadHash: 'query-test-hash',
+      walletId: wallet.id,
+      playerId,
+      roundId: 'round-query',
+      gameId: 'slot-hot',
+      kind: WagerTransactionKind.Bet,
+      money: { amount: '10.00', currency: 'BRL' },
+    });
+    const walletQueries = new GetWalletQueriesUseCase(new PostgresUnitOfWork(orm!.em.fork()));
+    const transactionQueries = new GetWagerTransactionUseCase(new PostgresUnitOfWork(orm!.em.fork()));
+
+    expect(await walletQueries.getWallet(wallet.id)).toEqual({
+      id: wallet.id,
+      playerId,
+      balance: { amount: '90.00', currency: 'BRL' },
+      version: 2,
+    });
+    expect((await transactionQueries.byId(transaction.transactionId)).transactionId).toBe(
+      transaction.transactionId,
+    );
+    expect(
+      (await transactionQueries.byExternalId('provider-a', externalTransactionId)).transactionId,
+    ).toBe(transaction.transactionId);
+
+    const firstPage = await walletQueries.getLedger(wallet.id, '1');
+    expect(firstPage.entries).toHaveLength(1);
+    expect(firstPage.nextCursor).toBeTruthy();
+    const secondPage = await walletQueries.getLedger(wallet.id, '1', firstPage.nextCursor ?? undefined);
+    expect(secondPage.entries).toHaveLength(1);
+    expect(secondPage.nextCursor).toBeNull();
+    expect(firstPage.entries[0]?.id).not.toBe(secondPage.entries[0]?.id);
+  });
+
+  it('should report readiness only when PostgreSQL and SQS are reachable', async () => {
+    const sqsClient = createSqsClient();
+    try {
+      const healthController = new HealthController(orm!.em.fork(), sqsClient);
+      expect(healthController.live()).toEqual({ status: 'ok' });
+      await expect(healthController.ready()).resolves.toEqual({
+        status: 'ok',
+        checks: { postgres: 'ok', sqs: 'ok' },
+      });
+    } finally {
+      sqsClient.destroy();
+    }
   });
 });

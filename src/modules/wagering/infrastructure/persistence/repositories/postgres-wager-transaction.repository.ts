@@ -8,6 +8,11 @@ import { Money } from '../../../../../shared/domain/value-objects/money';
 export class PostgresWagerTransactionRepository implements IWagerTransactionRepository {
   constructor(private readonly em: EntityManager) {}
 
+  async findById(id: string): Promise<WagerTransaction | null> {
+    const ormEntity = await this.em.findOne(WagerTransactionOrmEntity, { id });
+    return ormEntity ? this.toDomain(ormEntity) : null;
+  }
+
   async lockIdempotencyKey(key: string): Promise<void> {
     await this.em.getConnection().execute(
       'SELECT pg_advisory_xact_lock(hashtextextended(?, 0))',

@@ -11,6 +11,7 @@ export interface IWalletRepository {
 
 export interface IWagerTransactionRepository {
   lockIdempotencyKey(key: string): Promise<void>;
+  findById(id: string): Promise<WagerTransaction | null>;
   findByIdempotencyKey(key: string): Promise<WagerTransaction | null>;
   findByExternalId(providerId: string, externalTransactionId: string): Promise<WagerTransaction | null>;
   hasSuccessfulReversal(
@@ -24,7 +25,18 @@ export interface IWagerTransactionRepository {
 
 export interface IWalletLedgerRepository {
   save(entry: WalletLedgerEntry): Promise<void>;
+  findPage(walletId: string, cursor: WalletLedgerCursor | undefined, limit: number): Promise<WalletLedgerPageEntry[]>;
   reconcile(walletId: string): Promise<WalletLedgerReconciliationSnapshot | null>;
+}
+
+export interface WalletLedgerCursor {
+  createdAt: string;
+  id: string;
+}
+
+export interface WalletLedgerPageEntry {
+  entry: WalletLedgerEntry;
+  cursor: WalletLedgerCursor;
 }
 
 export interface WalletLedgerReconciliationSnapshot {

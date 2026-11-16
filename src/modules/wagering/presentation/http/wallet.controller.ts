@@ -1,7 +1,23 @@
-import { Body, Controller, HttpCode, HttpStatus, Logger, NotFoundException, Param, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Logger,
+  NotFoundException,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { CreateWalletUseCase } from '../../application/use-cases/create-wallet.use-case';
 import type { CreateWalletCommand } from '../../application/use-cases/create-wallet.use-case';
 import { ReconcileWalletUseCase, WalletNotFoundError } from '../../application/use-cases/reconcile-wallet.use-case';
+import {
+  GetWalletQueriesUseCase,
+  InvalidLedgerQueryError,
+} from '../../application/use-cases/get-wallet-queries.use-case';
 
 @Controller('wallets')
 export class WalletController {
@@ -10,7 +26,33 @@ export class WalletController {
   constructor(
     private readonly createWalletUseCase: CreateWalletUseCase,
     private readonly reconcileWalletUseCase: ReconcileWalletUseCase,
+    private readonly getWalletQueriesUseCase: GetWalletQueriesUseCase,
   ) {}
+
+  @Get(':walletId')
+  async getWallet(@Param('walletId') walletId: string) {
+    try {
+      return await this.getWalletQueriesUseCase.getWallet(walletId);
+    } catch (error: unknown) {
+      if (error instanceof WalletNotFoundError) throw new NotFoundException(error.message);
+      throw error;
+    }
+  }
+
+  @Get(':walletId/ledger')
+  async getLedger(
+    @Param('walletId') walletId: string,
+    @Query('cursor') cursor?: string,
+    @Query('limit') limit?: string,
+  ) {
+    try {
+      return await this.getWalletQueriesUseCase.getLedger(walletId, limit, cursor);
+    } catch (error: unknown) {
+      if (error instanceof WalletNotFoundError) throw new NotFoundException(error.message);
+      if (error instanceof InvalidLedgerQueryError) throw new BadRequestException(error.message);
+      throw error;
+    }
+  }
 
   @Post()
   @HttpCode(HttpStatus.CREATED)

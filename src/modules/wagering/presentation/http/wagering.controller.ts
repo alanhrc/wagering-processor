@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Headers, HttpCode, HttpStatus, HttpException } from '@nestjs/common';
+import { Controller, Post, Body, Headers, HttpCode, HttpStatus, HttpException, Get, Param, NotFoundException } from '@nestjs/common';
 import {
   IdempotencyKeyConflictError,
   InternalWagerTransactionError,
@@ -9,10 +9,27 @@ import {
 import { InsufficientFundsError } from '../../domain/entities/wallet.entity';
 import { InvalidWagerAmountError } from '../../domain/entities/wager-transaction.entity';
 import { hashWagerPayload } from '../../application/hash-wager-payload';
+import {
+  GetWagerTransactionUseCase,
+  WagerTransactionNotFoundError,
+} from '../../application/use-cases/get-wager-transaction.use-case';
 
 @Controller('wagering')
 export class WageringController {
-  constructor(private readonly processWagerUseCase: ProcessWagerTransactionUseCase) {}
+  constructor(
+    private readonly processWagerUseCase: ProcessWagerTransactionUseCase,
+    private readonly getWagerTransactionUseCase: GetWagerTransactionUseCase,
+  ) {}
+
+  @Get('transactions/:transactionId')
+  async getTransaction(@Param('transactionId') transactionId: string) {
+    try {
+      return await this.getWagerTransactionUseCase.byId(transactionId);
+    } catch (error: unknown) {
+      if (error instanceof WagerTransactionNotFoundError) throw new NotFoundException(error.message);
+      throw error;
+    }
+  }
 
   @Post('transactions')
   @HttpCode(HttpStatus.OK)

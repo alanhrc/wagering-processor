@@ -4,9 +4,13 @@ import { SQSClient } from '@aws-sdk/client-sqs';
 
 import { WageringController } from './presentation/http/wagering.controller';
 import { WalletController } from './presentation/http/wallet.controller';
+import { ProviderWageringController } from './presentation/http/provider-wagering.controller';
+import { HealthController } from './presentation/http/health.controller';
 import { CreateWalletUseCase } from './application/use-cases/create-wallet.use-case';
 import { ProcessWagerTransactionUseCase } from './application/use-cases/process-wager-transaction.use-case';
 import { ReconcileWalletUseCase } from './application/use-cases/reconcile-wallet.use-case';
+import { GetWalletQueriesUseCase } from './application/use-cases/get-wallet-queries.use-case';
+import { GetWagerTransactionUseCase } from './application/use-cases/get-wager-transaction.use-case';
 import { PostgresUnitOfWork } from './infrastructure/persistence/repositories/postgres-uow';
 import { createSqsClient } from './infrastructure/messaging/sqs.client';
 import { SqsEventPublisher } from './infrastructure/messaging/sqs-event.publisher';
@@ -15,7 +19,7 @@ import { PendingReferenceWorker } from './infrastructure/workers/pending-referen
 import { SqsWagerConsumerWorker } from './infrastructure/workers/sqs-wager-consumer.worker';
 
 @Module({
-  controllers: [WageringController, WalletController],
+  controllers: [WageringController, WalletController, ProviderWageringController, HealthController],
   providers: [
     {
       provide: SQSClient,
@@ -41,6 +45,16 @@ import { SqsWagerConsumerWorker } from './infrastructure/workers/sqs-wager-consu
       provide: ReconcileWalletUseCase,
       inject: [EntityManager],
       useFactory: (em: EntityManager) => new ReconcileWalletUseCase(new PostgresUnitOfWork(em)),
+    },
+    {
+      provide: GetWalletQueriesUseCase,
+      inject: [EntityManager],
+      useFactory: (em: EntityManager) => new GetWalletQueriesUseCase(new PostgresUnitOfWork(em)),
+    },
+    {
+      provide: GetWagerTransactionUseCase,
+      inject: [EntityManager],
+      useFactory: (em: EntityManager) => new GetWagerTransactionUseCase(new PostgresUnitOfWork(em)),
     },
   ],
 })
