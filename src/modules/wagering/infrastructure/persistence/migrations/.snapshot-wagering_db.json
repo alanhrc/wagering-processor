@@ -184,6 +184,40 @@
           "enumItems": [],
           "mappedType": "string"
         },
+        "lock_token": {
+          "name": "lock_token",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "locked_until": {
+          "name": "locked_until",
+          "type": "timestamptz(6)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
         "next_attempt_at": {
           "name": "next_attempt_at",
           "type": "timestamptz(6)",
@@ -254,6 +288,17 @@
         }
       },
       "indexes": [
+        {
+          "columnNames": [
+            "occurred_at"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "idx_outbox_messages_pending_occurred_at",
+          "primary": false,
+          "unique": false,
+          "where": "published_at IS NULL"
+        },
         {
           "columnNames": [
             "id"

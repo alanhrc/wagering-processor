@@ -4,6 +4,8 @@ import { Wallet } from '../../domain/entities/wallet.entity';
 import { WagerTransaction, WagerTransactionKind } from '../../domain/entities/wager-transaction.entity';
 import { WalletLedgerEntry, LedgerDirection } from '../../domain/entities/wallet-ledger-entry.entity';
 import { IUnitOfWork } from '../../domain/ports/wagering.repository.interface';
+import { WagerTransactionProcessed } from '../../domain/events/wager-transaction-processed.event';
+import { WalletBalanceChanged } from '../../domain/events/wallet-balance-changed.event';
 
 export interface CreateWalletCommand {
   playerId: string;
@@ -28,7 +30,7 @@ export class CreateWalletUseCase {
       initialBalance,
     });
 
-    return this.uow.transactional(async ({ wallets, wagers, ledger }) => {
+    return this.uow.transactional(async ({ wallets, wagers, ledger, outbox }) => {
       await wallets.save(wallet);
 
       if (initialBalance.isPositive()) {
@@ -49,17 +51,24 @@ export class CreateWalletUseCase {
         openingTransaction.recordResultBalance(initialBalance);
 
         await wagers.save(openingTransaction);
-        await ledger.save(
-          WalletLedgerEntry.create({
-            id: crypto.randomUUID(),
-            walletId: wallet.id,
-            transactionId: openingTransaction.id,
-            direction: LedgerDirection.Credit,
-            money: initialBalance,
-            balanceBefore: Money.zero(initialBalance.currency),
-            balanceAfter: initialBalance,
-          }),
+        const entry = WalletLedgerEntry.create({
+          id: crypto.randomUUID(),
+          walletId: wallet.id,
+          transactionId: openingTransaction.id,
+          direction: LedgerDirection.Credit,
+          money: initialBalance,
+          balanceBefore: Money.zero(initialBalance.currency),
+          balanceAfter: initialBalance,
+        });
+        await ledger.save(entry);
+        const context = {
+          correlationId: openingTransaction.id,
+          causationId: openingTransaction.externalTransactionId,
+        };
+        await outbox.enqueue(
+          WagerTransactionProcessed.from(openingTransaction, wallet.balance.toJSON(), context),
         );
+        await outbox.enqueue(WalletBalanceChanged.from(wallet, entry, context));
       }
 
       return {

@@ -138,6 +138,7 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
           kind: data.kind,
           money: data.money,
           referenceExternalTransactionId: data.referenceExternalTransactionId,
+          ...(typeof data.correlationId === 'string' ? { correlationId: data.correlationId } : {}),
         });
 
         // 4. Marca a inbox como processada na mesma transação

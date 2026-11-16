@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+import { IntegrationEventEnvelope } from '../../domain/events/integration-event';
 
 @Injectable()
 export class SqsEventPublisher {
@@ -8,19 +9,10 @@ export class SqsEventPublisher {
   constructor(private readonly sqsClient: SQSClient) {
     this.queueUrl =
       process.env.AWS_SQS_EVENTS_QUEUE_URL ||
-      'http://localhost:4566/000000000000/wager-transactions.fifo';
+      'http://localhost:4566/000000000000/wager-events.fifo';
   }
 
-  async publish(envelope: {
-    eventId: string;
-    eventType: string;
-    aggregateId: string;
-    correlationId: string;
-    causationId?: string;
-    occurredAt: string;
-    version: number;
-    data: Record<string, unknown>;
-  }): Promise<void> {
+  async publish(envelope: IntegrationEventEnvelope<Record<string, unknown>>): Promise<void> {
     const command = new SendMessageCommand({
       QueueUrl: this.queueUrl,
       MessageBody: JSON.stringify(envelope),

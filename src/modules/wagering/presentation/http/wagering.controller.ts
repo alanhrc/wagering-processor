@@ -18,7 +18,8 @@ export class WageringController {
   @HttpCode(HttpStatus.OK)
   async submitTransaction(
     @Headers('idempotency-key') idempotencyKey: string,
-    @Body() body: Omit<ProcessWagerCommand, 'idempotencyKey' | 'payloadHash'>,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+    @Body() body: Omit<ProcessWagerCommand, 'idempotencyKey' | 'payloadHash' | 'correlationId'>,
   ) {
     if (!idempotencyKey) {
       throw new HttpException('Missing required header: Idempotency-Key', HttpStatus.BAD_REQUEST);
@@ -30,6 +31,7 @@ export class WageringController {
       ...body,
       idempotencyKey,
       payloadHash,
+      ...(correlationId ? { correlationId } : {}),
     };
 
     try {
