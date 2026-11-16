@@ -33,6 +33,9 @@ export class Wallet {
     if (!props.id || !props.playerId) {
       throw new Error('Wallet ID and Player ID are required');
     }
+    if (props.initialBalance.isNegative()) {
+      throw new Error('Initial wallet balance cannot be negative');
+    }
 
     const now = new Date();
     return new Wallet(

@@ -8,7 +8,12 @@ import {
 } from '@aws-sdk/client-sqs';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { createHash } from 'crypto';
-import { ProcessWagerTransactionUseCase } from '../../application/use-cases/process-wager-transaction.use-case';
+import {
+  InternalWagerTransactionError,
+  InvalidWagerTransactionKindError,
+  ProcessWagerTransactionUseCase,
+} from '../../application/use-cases/process-wager-transaction.use-case';
+import { InvalidWagerAmountError } from '../../domain/entities/wager-transaction.entity';
 import { PostgresUnitOfWork } from '../persistence/repositories/postgres-uow';
 
 @Injectable()
@@ -138,7 +143,13 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
       );
     } catch (error: any) {
       // Se for erro de payload malformado/inválido, fazemos ACK para não ficar em loop infinito (ou enviamos para DLQ)
-      if (error.message?.includes('Invalid monetary') || error.message?.includes('requires a reference')) {
+      if (
+        error instanceof InternalWagerTransactionError ||
+        error instanceof InvalidWagerTransactionKindError ||
+        error instanceof InvalidWagerAmountError ||
+        error.message?.includes('Invalid monetary') ||
+        error.message?.includes('requires a reference')
+      ) {
         this.logger.warn(`Permanent validation error on message ${messageId}, acknowledging to drop: ${error.message}`);
         await this.sqsClient.send(
           new DeleteMessageCommand({

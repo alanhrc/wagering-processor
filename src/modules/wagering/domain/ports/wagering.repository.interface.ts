@@ -11,6 +11,12 @@ export interface IWalletRepository {
 export interface IWagerTransactionRepository {
   findByIdempotencyKey(key: string): Promise<WagerTransaction | null>;
   findByExternalId(providerId: string, externalTransactionId: string): Promise<WagerTransaction | null>;
+  hasSuccessfulReversal(
+    providerId: string,
+    referenceExternalTransactionId: string,
+    excludingTransactionId: string,
+  ): Promise<boolean>;
+  findPendingReferencesDue(at: Date, limit: number, maxAttempts: number): Promise<WagerTransaction[]>;
   save(transaction: WagerTransaction): Promise<void>;
 }
 

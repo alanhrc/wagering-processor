@@ -23,6 +23,20 @@ export enum FailureCode {
   DuplicateTransaction = 'DUPLICATE_TRANSACTION',
   CurrencyMismatch = 'CURRENCY_MISMATCH',
   InvalidStateTransition = 'INVALID_STATE_TRANSITION',
+  ReferenceNotProcessed = 'REFERENCE_NOT_PROCESSED',
+  InvalidReferenceKind = 'INVALID_REFERENCE_KIND',
+  ReferenceMismatch = 'REFERENCE_MISMATCH',
+  ReversalInsufficientFunds = 'REVERSAL_INSUFFICIENT_FUNDS',
+  InvalidAmount = 'INVALID_AMOUNT',
+  WalletNotFound = 'WALLET_NOT_FOUND',
+  WalletOwnershipMismatch = 'WALLET_OWNERSHIP_MISMATCH',
+}
+
+export class InvalidWagerAmountError extends Error {
+  constructor() {
+    super('Wager transaction amount must be positive');
+    this.name = 'InvalidWagerAmountError';
+  }
 }
 
 export interface WagerTransactionProps {
@@ -43,6 +57,8 @@ export interface WagerTransactionProps {
   referenceTransactionId?: string;
   failureCode?: FailureCode;
   processedAt?: Date;
+  attempts?: number;
+  nextAttemptAt?: Date;
 }
 
 export class WagerTransaction {
@@ -64,9 +80,14 @@ export class WagerTransaction {
     private _referenceTransactionId?: string,
     private _failureCode?: FailureCode,
     private _processedAt?: Date,
+    private _attempts = 0,
+    private _nextAttemptAt?: Date,
   ) {}
 
   static create(props: Omit<WagerTransactionProps, 'createdAt' | 'status'>): WagerTransaction {
+    if (!props.money.isPositive()) {
+      throw new InvalidWagerAmountError();
+    }
     // Validação de regra: REFUND e ROLLBACK exigem referência externa
     if ((props.kind === WagerTransactionKind.Refund || props.kind === WagerTransactionKind.Rollback) && !props.referenceExternalTransactionId) {
       throw new Error(`Transaction kind ${props.kind} requires a referenceExternalTransactionId`);
@@ -109,6 +130,8 @@ export class WagerTransaction {
       props.referenceTransactionId,
       props.failureCode,
       props.processedAt,
+      props.attempts,
+      props.nextAttemptAt,
     );
   }
 
@@ -116,12 +139,15 @@ export class WagerTransaction {
   get referenceTransactionId(): string | undefined { return this._referenceTransactionId; }
   get failureCode(): FailureCode | undefined { return this._failureCode; }
   get processedAt(): Date | undefined { return this._processedAt; }
+  get attempts(): number { return this._attempts; }
+  get nextAttemptAt(): Date | undefined { return this._nextAttemptAt; }
 
   public markProcessed(referenceTransactionId?: string): void {
     this.assertNotTerminal();
     this._status = WagerTransactionStatus.Processed;
     this._referenceTransactionId = referenceTransactionId;
     this._processedAt = new Date();
+    this._nextAttemptAt = undefined;
   }
 
   public markPendingReference(): void {
@@ -129,11 +155,19 @@ export class WagerTransaction {
     this._status = WagerTransactionStatus.PendingReference;
   }
 
+  public scheduleReferenceRetry(at: Date, delayMilliseconds: number): void {
+    this.assertNotTerminal();
+    this._status = WagerTransactionStatus.PendingReference;
+    this._attempts += 1;
+    this._nextAttemptAt = new Date(at.getTime() + delayMilliseconds);
+  }
+
   public reject(code: FailureCode): void {
     this.assertNotTerminal();
     this._status = WagerTransactionStatus.Rejected;
     this._failureCode = code;
     this._processedAt = new Date();
+    this._nextAttemptAt = undefined;
   }
 
   public fail(code: FailureCode): void {

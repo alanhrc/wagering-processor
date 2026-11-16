@@ -3,15 +3,18 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import { SQSClient } from '@aws-sdk/client-sqs';
 
 import { WageringController } from './presentation/http/wagering.controller';
+import { WalletController } from './presentation/http/wallet.controller';
+import { CreateWalletUseCase } from './application/use-cases/create-wallet.use-case';
 import { ProcessWagerTransactionUseCase } from './application/use-cases/process-wager-transaction.use-case';
 import { PostgresUnitOfWork } from './infrastructure/persistence/repositories/postgres-uow';
 import { createSqsClient } from './infrastructure/messaging/sqs.client';
 import { SqsEventPublisher } from './infrastructure/messaging/sqs-event.publisher';
 import { OutboxPublisherWorker } from './infrastructure/workers/outbox-publisher.worker';
+import { PendingReferenceWorker } from './infrastructure/workers/pending-reference.worker';
 import { SqsWagerConsumerWorker } from './infrastructure/workers/sqs-wager-consumer.worker';
 
 @Module({
-  controllers: [WageringController],
+  controllers: [WageringController, WalletController],
   providers: [
     {
       provide: SQSClient,
@@ -19,6 +22,7 @@ import { SqsWagerConsumerWorker } from './infrastructure/workers/sqs-wager-consu
     },
     SqsEventPublisher,
     OutboxPublisherWorker,
+    PendingReferenceWorker,
     SqsWagerConsumerWorker,
     {
       provide: ProcessWagerTransactionUseCase,
@@ -26,6 +30,11 @@ import { SqsWagerConsumerWorker } from './infrastructure/workers/sqs-wager-consu
       useFactory: (em: EntityManager) => {
         return new ProcessWagerTransactionUseCase(new PostgresUnitOfWork(em));
       },
+    },
+    {
+      provide: CreateWalletUseCase,
+      inject: [EntityManager],
+      useFactory: (em: EntityManager) => new CreateWalletUseCase(new PostgresUnitOfWork(em)),
     },
   ],
 })

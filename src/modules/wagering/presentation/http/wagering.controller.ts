@@ -1,6 +1,12 @@
 import { Controller, Post, Body, Headers, HttpCode, HttpStatus, HttpException } from '@nestjs/common';
-import { ProcessWagerTransactionUseCase, ProcessWagerCommand } from '../../application/use-cases/process-wager-transaction.use-case';
+import {
+  InternalWagerTransactionError,
+  InvalidWagerTransactionKindError,
+  ProcessWagerTransactionUseCase,
+  ProcessWagerCommand,
+} from '../../application/use-cases/process-wager-transaction.use-case';
 import { InsufficientFundsError } from '../../domain/entities/wallet.entity';
+import { InvalidWagerAmountError } from '../../domain/entities/wager-transaction.entity';
 import { createHash } from 'crypto';
 
 @Controller('wagering')
@@ -46,6 +52,13 @@ export class WageringController {
       }
       if (error instanceof InsufficientFundsError) {
         throw new HttpException({ error: error.message }, HttpStatus.UNPROCESSABLE_ENTITY); // 422
+      }
+      if (
+        error instanceof InternalWagerTransactionError ||
+        error instanceof InvalidWagerAmountError ||
+        error instanceof InvalidWagerTransactionKindError
+      ) {
+        throw new HttpException({ error: error.message }, HttpStatus.BAD_REQUEST);
       }
       throw new HttpException({ error: error.message || 'Internal server error' }, HttpStatus.INTERNAL_SERVER_ERROR);
     }

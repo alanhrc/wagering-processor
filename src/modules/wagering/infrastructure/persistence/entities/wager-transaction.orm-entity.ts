@@ -56,4 +56,10 @@ export class WagerTransactionOrmEntity {
 
   @Property({ fieldName: 'processed_at', type: 'datetime', nullable: true })
   processedAt?: Date;
+
+  @Property({ type: 'int', default: 0 })
+  attempts = 0;
+
+  @Property({ fieldName: 'next_attempt_at', type: 'datetime', nullable: true })
+  nextAttemptAt?: Date;
 }
