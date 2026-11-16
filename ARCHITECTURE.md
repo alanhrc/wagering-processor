@@ -85,4 +85,15 @@ Counters and histograms are in-memory per process and reset when that process re
 
 ## Local development and tests
 
-See [README.md](README.md) for the step-by-step setup, `.env.example` variables, routes, and test commands. The project does not include or run a seeder; wallet creation is available through `POST /wallets`.
+See [README.md](README.md) for the step-by-step setup, `.env.example` variables, routes, and test commands. `bun run seed:user` reads `AUTH_SEED_EMAIL` and `AUTH_SEED_PASSWORD` from `.env` and reuses the application seed use case without starting HTTP or queue workers. Migrations must run first. Startup also seeds the account when both values are present. Repeated runs preserve existing passwords; changing the environment is not a password reset. Wallet creation remains available through `POST /wallets`.
+
+
+## Shutdown and experiment boundaries
+
+The bootstrap enables Nest shutdown hooks. SIGTERM invokes worker lifecycle cleanup, stops timers and waits for in-flight work. The SQS consumer acknowledges only committed operations; unacknowledged deliveries remain recoverable. Deployment termination grace periods must cover polling and current operations.
+
+`bun run test:load` reads local settings directly from `.env`, requires `LOAD_TEST_CONFIRM_LOCAL=YES`, and rejects remote database/broker targets. Each run creates a unique schema and three FIFO queues and starts its own HTTP process. `KEEP_TEST_SCHEMA` controls schema retention; queues and the child process are cleaned up. The workload submits unique BET requests against one shared wallet, checks reconciliation and expected final balance, and records throughput, end-to-end percentiles, errors, observed lock conflicts and sampled outbox lag. A short local closed-loop benchmark does not establish production capacity or event-delivery completion.
+
+## Requirement review limitations
+
+The financial and messaging scenarios have real PostgreSQL/LocalStack integration coverage. Passing tests is evidence for those scenarios, not proof over every possible interleaving. The native `bun test` discovers the unit and Swagger specifications; `bun run test:e2e` and `bun run test:integration` select the additional suites explicitly using Vitest. This differs from the challenge's mandatory Bun test runner choice for those suites. Custom Argon2/JWT authentication also differs from the requested external IdP approach. Neither difference should be described as literal 100% compliance.

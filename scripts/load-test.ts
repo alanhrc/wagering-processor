@@ -25,6 +25,7 @@ interface AuthenticatedUser {
 
 interface WalletResponse {
   id: string;
+  balance: { amount: string; currency: string };
 }
 
 interface MetricSnapshot {
@@ -282,7 +283,7 @@ async function main(): Promise<void> {
           walletId,
           roundId: `round-${operationId}`,
           gameId: 'load-test-game',
-          kind: 'LOSS',
+          kind: 'BET',
           money: { amount: '0.01', currency: 'BRL' },
         }),
       });
@@ -338,9 +339,14 @@ async function main(): Promise<void> {
     `${baseUrl}/wallets/${walletId}/reconciliation`,
     { method: 'POST', headers: { authorization: `Bearer ${token}` } },
   );
+  const finalWallet = await request<WalletResponse>(`${baseUrl}/wallets/${walletId}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
 
   const latencies = results.map(({ latencyMs }) => latencyMs);
   const failures = results.filter(({ status }) => status !== 200);
+  const expectedBalanceCents = 100_000n - BigInt(warmupRequests + results.length - failures.length);
+  const expectedBalance = `${expectedBalanceCents / 100n}.${(expectedBalanceCents % 100n).toString().padStart(2, '0')}`;
   const report = {
     generatedAt: new Date().toISOString(),
     environment: {
@@ -358,7 +364,8 @@ async function main(): Promise<void> {
     },
     methodology: {
       endpoint: 'POST /wagering/transactions',
-      operation: 'LOSS of 0.01 BRL per request against one shared wallet',
+      operation: 'BET of 0.01 BRL per request against one shared wallet opened at 1000.00 BRL',
+      financialWrites: 'Each accepted request debits the wallet and appends one immutable ledger entry.',
       authentication: 'One registered user and one JWT bearer token',
       idempotency: 'Unique Idempotency-Key per measured request',
       requests,
@@ -398,6 +405,12 @@ async function main(): Promise<void> {
         consistent: reconciliation.body.consistent ?? false,
         checkedEntries: reconciliation.body.checkedEntries ?? 0,
       },
+      wallet: {
+        httpStatus: finalWallet.status,
+        expectedBalance: { amount: expectedBalance, currency: 'BRL' },
+        actualBalance: finalWallet.body.balance ?? null,
+        matchesExpectedBalance: finalWallet.status === 200 && finalWallet.body.balance?.amount === expectedBalance,
+      },
     },
     cleanup: {
       schemaDropped: false,
@@ -410,7 +423,13 @@ async function main(): Promise<void> {
     process.env.LOAD_TEST_REPORT_PATH || `reports/load-tests/load-${new Date().toISOString().replaceAll(':', '-')}.json`,
   );
   pendingReport = report;
-  if (failures.length > 0 || reconciliation.status !== 200 || !reconciliation.body.consistent) {
+  if (
+    failures.length > 0 ||
+    reconciliation.status !== 200 ||
+    !reconciliation.body.consistent ||
+    finalWallet.status !== 200 ||
+    finalWallet.body.balance?.amount !== expectedBalance
+  ) {
     process.exitCode = 1;
   }
 }

@@ -19,6 +19,11 @@ import { Migration20261116000000 } from '../../src/modules/wagering/infrastructu
 import { Migration20261117000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261117000000';
 import { Migration20261118000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261118000000';
 import { Migration20261119000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261119000000';
+import { AuthUserOrmEntity } from '../../src/modules/authentication/infrastructure/persistence/auth-user.orm-entity';
+import { PostgresAuthUserRepository } from '../../src/modules/authentication/infrastructure/persistence/postgres-auth-user.repository';
+import { Argon2PasswordHasher } from '../../src/modules/authentication/infrastructure/argon2-password.hasher';
+import { SeedInitialUserUseCase } from '../../src/modules/authentication/application/seed-initial-user.use-case';
+import { InitialUserSeeder } from '../../src/modules/authentication/infrastructure/initial-user-seeder';
 
 import { PostgresWalletRepository } from '../../src/modules/wagering/infrastructure/persistence/repositories/postgres-wallet.repository';
 
@@ -58,7 +63,7 @@ describe('Wagering Concurrency & Integration Tests', () => {
   const createOrmConnection = (schema = schemaName) =>
     MikroORM.init({
       ...config,
-      entities: [WalletOrmEntity, WagerTransactionOrmEntity, WalletLedgerEntryOrmEntity],
+      entities: [WalletOrmEntity, WagerTransactionOrmEntity, WalletLedgerEntryOrmEntity, AuthUserOrmEntity],
       entitiesTs: [],
       metadataProvider: ReflectMetadataProvider,
       dbName,
@@ -96,6 +101,41 @@ describe('Wagering Concurrency & Integration Tests', () => {
       } finally {
         await orm.close(true);
       }
+    }
+  });
+
+  it('should seed the configured user into PostgreSQL with Argon2id without replacing an existing password', async () => {
+    const originalEmail = process.env.AUTH_SEED_EMAIL;
+    const originalPassword = process.env.AUTH_SEED_PASSWORD;
+    const email = `seed-${crypto.randomUUID()}@example.test`;
+    const initialPassword = 'initial-seed-password-long';
+    const repository = new PostgresAuthUserRepository(orm!.em);
+    const hasher = new Argon2PasswordHasher();
+    const seeder = new InitialUserSeeder(new SeedInitialUserUseCase(repository, hasher));
+
+    process.env.AUTH_SEED_EMAIL = email;
+    process.env.AUTH_SEED_PASSWORD = initialPassword;
+
+    try {
+      await seeder.onModuleInit();
+
+      const persistedUser = await repository.findByEmail(email);
+      expect(persistedUser).toBeDefined();
+      expect(persistedUser?.passwordHash).not.toBe(initialPassword);
+      expect(await hasher.verify(persistedUser!.passwordHash, initialPassword)).toBe(true);
+
+      process.env.AUTH_SEED_PASSWORD = 'replacement-seed-password-long';
+      await seeder.onModuleInit();
+
+      const unchangedUser = await repository.findByEmail(email);
+      expect(unchangedUser?.passwordHash).toBe(persistedUser?.passwordHash);
+      expect(await hasher.verify(unchangedUser!.passwordHash, initialPassword)).toBe(true);
+      expect(await hasher.verify(unchangedUser!.passwordHash, 'replacement-seed-password-long')).toBe(false);
+    } finally {
+      if (originalEmail === undefined) delete process.env.AUTH_SEED_EMAIL;
+      else process.env.AUTH_SEED_EMAIL = originalEmail;
+      if (originalPassword === undefined) delete process.env.AUTH_SEED_PASSWORD;
+      else process.env.AUTH_SEED_PASSWORD = originalPassword;
     }
   });
 

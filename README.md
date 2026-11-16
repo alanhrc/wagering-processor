@@ -48,6 +48,8 @@ API financeira para processar operações de apostas com valores exatos, ledger 
    bun run migration:up
    ```
 
+   Execute `bun run seed:user` depois das migrations para garantir o usuário do `.env` sem iniciar a API. O comando é idempotente e não redefine senhas existentes.
+
    A migration `Migration20261119000000` cria `auth_users` com e-mail único e hash de senha. Com as variáveis `AUTH_SEED_*` definidas, a aplicação cria o usuário inicial ao iniciar; a senha nunca é gravada em texto puro e um usuário já existente não tem sua senha alterada pelo seed.
 
 6. Inicie a API em modo de desenvolvimento:
@@ -209,7 +211,7 @@ test/
 | `bun run test` | Money, validações, invariantes de Wallet, transições de WagerTransaction e formatação das métricas. |
 | `bun run test:e2e` | Rotas HTTP, contratos e status 200/202/400/404/409/422, health checks, métricas e Swagger. |
 | `bun run test:integration` | PostgreSQL e LocalStack: migrations e constraints, atomicidade, inbox/outbox, retries, DLQ, redelivery, reinício e reconciliação. Inclui 50 entregas simultâneas, disputa por saldo, wallets diferentes e três processos Bun independentes. |
-| `LOAD_TEST_CONFIRM_LOCAL=YES DB_POSTGRES_HOST=localhost bun run test:load` | Benchmark HTTP contra uma instância local, com métricas de desempenho e reconciliação final; gera relatório JSON em `reports/load-tests/`. |
+| `bun run test:load` | Benchmark HTTP contra uma instância local, com métricas de desempenho e reconciliação final; gera relatório JSON em `reports/load-tests/`. |
 | `bun run build` | Compilação TypeScript/NestJS. |
 | `bun run lint` | Regras estáticas em `src/` e `test/`. |
 
@@ -217,7 +219,7 @@ Os testes de integração criam um schema isolado. `KEEP_TEST_SCHEMA=true` mant�
 
 O teste de carga exige `LOAD_TEST_CONFIRM_LOCAL=YES` e só aceita PostgreSQL e SQS em hosts locais. Use `DB_POSTGRES_HOST=localhost` se seu `.env` usar `0.0.0.0` para bind local. Cria um schema e filas temporários exclusivos, inicia sua própria instância HTTP e remove as filas e o processo ao terminar. O schema segue `KEEP_TEST_SCHEMA`. Configure `LOAD_TEST_REQUESTS`, `LOAD_TEST_CONCURRENCY` e `LOAD_TEST_WARMUP_REQUESTS`; o relatório registra ambiente, método, throughput, p50/p95/p99, taxa de erro, conflitos de lock observados pela métrica e atraso amostrado da outbox. Como o desafio não define meta de RPS, os resultados são uma baseline deste ambiente local.
 
-Baseline registrada: 500 operações medidas, concorrência 25, 678,5 req/s, p50 34,1 ms, p95 50,8 ms, p99 70,7 ms, 0% de erros, delta de conflitos PostgreSQL igual a zero e reconciliação consistente. A outbox chegou a 0,528 s de atraso amostrado e estava em 0,718 s na coleta imediatamente após a carga. Esse resultado não estima capacidade de produção; o JSON inclui hardware, runtime e configuração usados: [relatório da execução](reports/load-tests/load-2026-11-16T22-34-19.541Z.json).
+Baseline BET registrada: 500 operações medidas, concorrência 25, 476,3 req/s, p50 47,8 ms, p95 79,1 ms, p99 112,8 ms, 0% de erros e delta de conflitos PostgreSQL igual a zero. Saldo final de 994,90 BRL e 511 lançamentos conferidos pela reconciliação (inclui 10 apostas de aquecimento). A outbox chegou a 0,862 s durante a amostragem e estava em 1,115 s após a carga. Este experimento curto não estabelece capacidade sustentada de produção: [relatório BET](reports/load-tests/load-2026-11-16T23-04-36.456Z.json).
 
 ## Logs e métricas
 
