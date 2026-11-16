@@ -21,6 +21,13 @@ export class InvalidWagerTransactionKindError extends Error {
   }
 }
 
+export class IdempotencyKeyConflictError extends Error {
+  constructor() {
+    super('Idempotency key conflict: same key with different payload');
+    this.name = 'IdempotencyKeyConflictError';
+  }
+}
+
 export interface ProcessWagerCommand {
   providerId: string;
   externalTransactionId: string;
@@ -57,25 +64,25 @@ export class ProcessWagerTransactionUseCase {
     }
 
     return this.uow.transactional(async ({ wallets, wagers, ledger }) => {
+      await wagers.lockIdempotencyKey(command.idempotencyKey);
       const existingTx = await wagers.findByIdempotencyKey(command.idempotencyKey);
       if (existingTx) {
         if (existingTx.payloadHash !== command.payloadHash) {
-          throw new Error('Idempotency key conflict: same key with different payload');
+          throw new IdempotencyKeyConflictError();
         }
         if (existingTx.status !== WagerTransactionStatus.PendingReference) {
-          const wallet = await wallets.findById(command.walletId);
-          return {
-            transactionId: existingTx.id,
-            status: existingTx.status,
-            balance: wallet ? wallet.balance.toJSON() : { amount: '0.00', currency: money.currency },
-            idempotentReplay: true,
-          };
-        }
-        if (existingTx.nextAttemptAt && existingTx.nextAttemptAt > new Date()) {
-          const wallet = await wallets.findById(command.walletId);
+          const wallet = existingTx.resultBalance ? null : await wallets.findById(command.walletId);
           return this.result(
             existingTx,
-            wallet?.balance ?? Money.zero(money.currency),
+            existingTx.resultBalance ?? wallet?.balance ?? Money.zero(money.currency),
+            true,
+          );
+        }
+        if (existingTx.nextAttemptAt && existingTx.nextAttemptAt > new Date()) {
+          const wallet = existingTx.resultBalance ? null : await wallets.findById(command.walletId);
+          return this.result(
+            existingTx,
+            existingTx.resultBalance ?? wallet?.balance ?? Money.zero(money.currency),
             true,
           );
         }
@@ -104,27 +111,25 @@ export class ProcessWagerTransactionUseCase {
       const currentTransaction = await wagers.findByIdempotencyKey(command.idempotencyKey);
       if (currentTransaction) {
         if (currentTransaction.payloadHash !== command.payloadHash) {
-          throw new Error('Idempotency key conflict: same key with different payload');
+          throw new IdempotencyKeyConflictError();
         }
         transaction = currentTransaction;
         if (
           transaction.status !== WagerTransactionStatus.PendingReference ||
           (transaction.nextAttemptAt && transaction.nextAttemptAt > new Date())
         ) {
-          return this.result(transaction, wallet.balance, true);
+          return this.result(transaction, transaction.resultBalance ?? wallet.balance, true);
         }
       }
 
       if (wallet.playerId !== command.playerId) {
         transaction.reject(FailureCode.WalletOwnershipMismatch);
-        await wagers.save(transaction);
-        return this.result(transaction, wallet.balance, false);
+        return this.persistResult(transaction, wallet.balance, wagers, false);
       }
 
       if (wallet.currency !== money.currency) {
         transaction.reject(FailureCode.CurrencyMismatch);
-        await wagers.save(transaction);
-        return this.result(transaction, wallet.balance, false);
+        return this.persistResult(transaction, wallet.balance, wagers, false);
       }
 
       const requiresReference =
@@ -146,16 +151,14 @@ export class ProcessWagerTransactionUseCase {
         if (reference.status !== WagerTransactionStatus.Processed) {
           if (reference.isTerminal()) {
             transaction.reject(FailureCode.ReferenceNotProcessed);
-            await wagers.save(transaction);
-            return this.result(transaction, wallet.balance, false);
+            return this.persistResult(transaction, wallet.balance, wagers, false);
           }
           return this.deferForReference(transaction, wallet.balance, wagers, FailureCode.ReferenceNotProcessed);
         }
 
         if (reference.money.currency !== money.currency) {
           transaction.reject(FailureCode.CurrencyMismatch);
-          await wagers.save(transaction);
-          return this.result(transaction, wallet.balance, false);
+          return this.persistResult(transaction, wallet.balance, wagers, false);
         }
 
         if (
@@ -164,8 +167,7 @@ export class ProcessWagerTransactionUseCase {
           reference.roundId !== command.roundId
         ) {
           transaction.reject(FailureCode.ReferenceMismatch);
-          await wagers.save(transaction);
-          return this.result(transaction, wallet.balance, false);
+          return this.persistResult(transaction, wallet.balance, wagers, false);
         }
 
         const validReferenceKind =
@@ -177,14 +179,12 @@ export class ProcessWagerTransactionUseCase {
 
         if (!validReferenceKind) {
           transaction.reject(FailureCode.InvalidReferenceKind);
-          await wagers.save(transaction);
-          return this.result(transaction, wallet.balance, false);
+          return this.persistResult(transaction, wallet.balance, wagers, false);
         }
 
         if (requiresReference && !reference.money.equals(money)) {
           transaction.reject(FailureCode.ReferenceMismatch);
-          await wagers.save(transaction);
-          return this.result(transaction, wallet.balance, false);
+          return this.persistResult(transaction, wallet.balance, wagers, false);
         }
 
         if (
@@ -196,8 +196,7 @@ export class ProcessWagerTransactionUseCase {
           )
         ) {
           transaction.reject(FailureCode.DuplicateTransaction);
-          await wagers.save(transaction);
-          return this.result(transaction, wallet.balance, false);
+          return this.persistResult(transaction, wallet.balance, wagers, false);
         }
       }
 
@@ -225,6 +224,7 @@ export class ProcessWagerTransactionUseCase {
         }
 
         transaction.markProcessed(reference?.id);
+        transaction.recordResultBalance(wallet.balance);
         await wagers.save(transaction);
         if (direction) {
           ledgerEntry = WalletLedgerEntry.create({
@@ -248,8 +248,7 @@ export class ProcessWagerTransactionUseCase {
               ? FailureCode.ReversalInsufficientFunds
               : FailureCode.InsufficientFunds,
           );
-          await wagers.save(transaction);
-          return this.result(transaction, wallet.balance, false);
+          return this.persistResult(transaction, wallet.balance, wagers, false);
         }
         throw error;
       }
@@ -269,6 +268,17 @@ export class ProcessWagerTransactionUseCase {
     };
   }
 
+  private async persistResult(
+    transaction: WagerTransaction,
+    balance: Money,
+    wagers: IWagerTransactionRepository,
+    idempotentReplay: boolean,
+  ): Promise<ProcessWagerResult> {
+    transaction.recordResultBalance(balance);
+    await wagers.save(transaction);
+    return this.result(transaction, balance, idempotentReplay);
+  }
+
   private async deferForReference(
     transaction: WagerTransaction,
     balance: Money,
@@ -282,7 +292,6 @@ export class ProcessWagerTransactionUseCase {
       const retryDelay = Math.min(1_000 * 2 ** retryNumber, maximumReferenceRetryDelayMilliseconds);
       transaction.scheduleReferenceRetry(new Date(), retryDelay);
     }
-    await wagers.save(transaction);
-    return this.result(transaction, balance, false);
+    return this.persistResult(transaction, balance, wagers, false);
   }
 }

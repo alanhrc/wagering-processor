@@ -59,6 +59,7 @@ export interface WagerTransactionProps {
   processedAt?: Date;
   attempts?: number;
   nextAttemptAt?: Date;
+  resultBalance?: Money;
 }
 
 export class WagerTransaction {
@@ -82,6 +83,7 @@ export class WagerTransaction {
     private _processedAt?: Date,
     private _attempts = 0,
     private _nextAttemptAt?: Date,
+    private _resultBalance?: Money,
   ) {}
 
   static create(props: Omit<WagerTransactionProps, 'createdAt' | 'status'>): WagerTransaction {
@@ -132,6 +134,7 @@ export class WagerTransaction {
       props.processedAt,
       props.attempts,
       props.nextAttemptAt,
+      props.resultBalance,
     );
   }
 
@@ -141,6 +144,14 @@ export class WagerTransaction {
   get processedAt(): Date | undefined { return this._processedAt; }
   get attempts(): number { return this._attempts; }
   get nextAttemptAt(): Date | undefined { return this._nextAttemptAt; }
+  get resultBalance(): Money | undefined { return this._resultBalance; }
+
+  public recordResultBalance(balance: Money): void {
+    if (balance.currency !== this.money.currency) {
+      throw new Error('Result balance currency must match transaction currency');
+    }
+    this._resultBalance = balance;
+  }
 
   public markProcessed(referenceTransactionId?: string): void {
     this.assertNotTerminal();

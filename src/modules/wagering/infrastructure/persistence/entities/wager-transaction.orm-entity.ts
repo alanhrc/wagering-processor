@@ -62,4 +62,7 @@ export class WagerTransactionOrmEntity {
 
   @Property({ fieldName: 'next_attempt_at', type: 'datetime', nullable: true })
   nextAttemptAt?: Date;
+
+  @Property({ fieldName: 'result_balance', type: 'numeric', precision: 15, scale: 2, nullable: true })
+  resultBalance?: string | null;
 }

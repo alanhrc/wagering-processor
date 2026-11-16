@@ -9,12 +9,14 @@ import {
 import { EntityManager } from '@mikro-orm/postgresql';
 import { createHash } from 'crypto';
 import {
+  IdempotencyKeyConflictError,
   InternalWagerTransactionError,
   InvalidWagerTransactionKindError,
   ProcessWagerTransactionUseCase,
 } from '../../application/use-cases/process-wager-transaction.use-case';
 import { InvalidWagerAmountError } from '../../domain/entities/wager-transaction.entity';
 import { PostgresUnitOfWork } from '../persistence/repositories/postgres-uow';
+import { canonicalJson, hashWagerPayload } from '../../application/hash-wager-payload';
 
 @Injectable()
 export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
@@ -84,7 +86,18 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
     const parsed = JSON.parse(msg.Body);
     const messageId: string = parsed.messageId || msg.MessageId!;
     const data = parsed.data;
-    const payloadHash = createHash('sha256').update(JSON.stringify(data)).digest('hex');
+    const inboxPayloadHash = createHash('sha256').update(canonicalJson(parsed)).digest('hex');
+    const payloadHash = hashWagerPayload({
+      providerId: data.providerId,
+      externalTransactionId: data.externalTransactionId,
+      walletId: data.walletId,
+      playerId: data.playerId,
+      roundId: data.roundId,
+      gameId: data.gameId,
+      kind: data.kind,
+      money: data.money,
+      referenceExternalTransactionId: data.referenceExternalTransactionId,
+    });
 
     const fork = this.em.fork();
 
@@ -95,7 +108,7 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
           `INSERT INTO inbox_messages (message_id, consumer_name, payload_hash, received_at)
            VALUES (?, ?, ?, NOW())
            ON CONFLICT (message_id, consumer_name) DO NOTHING`,
-          [messageId, this.consumerName, payloadHash],
+          [messageId, this.consumerName, inboxPayloadHash],
         );
 
         const [inboxRow] = await txEm.execute<Array<{ processed_at: Date | null }>>(
@@ -145,6 +158,7 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
       // Se for erro de payload malformado/inválido, fazemos ACK para não ficar em loop infinito (ou enviamos para DLQ)
       if (
         error instanceof InternalWagerTransactionError ||
+        error instanceof IdempotencyKeyConflictError ||
         error instanceof InvalidWagerTransactionKindError ||
         error instanceof InvalidWagerAmountError ||
         error.message?.includes('Invalid monetary') ||

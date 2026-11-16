@@ -9,6 +9,7 @@ export interface IWalletRepository {
 }
 
 export interface IWagerTransactionRepository {
+  lockIdempotencyKey(key: string): Promise<void>;
   findByIdempotencyKey(key: string): Promise<WagerTransaction | null>;
   findByExternalId(providerId: string, externalTransactionId: string): Promise<WagerTransaction | null>;
   hasSuccessfulReversal(

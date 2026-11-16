@@ -46,6 +46,7 @@ export class CreateWalletUseCase {
           money: initialBalance,
         });
         openingTransaction.markProcessed();
+        openingTransaction.recordResultBalance(initialBalance);
 
         await wagers.save(openingTransaction);
         await ledger.save(

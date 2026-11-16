@@ -8,6 +8,15 @@ import { Money } from '../../../../../shared/domain/value-objects/money';
 export class PostgresWagerTransactionRepository implements IWagerTransactionRepository {
   constructor(private readonly em: EntityManager) {}
 
+  async lockIdempotencyKey(key: string): Promise<void> {
+    await this.em.getConnection().execute(
+      'SELECT pg_advisory_xact_lock(hashtextextended(?, 0))',
+      [key],
+      'all',
+      this.em.getTransactionContext(),
+    );
+  }
+
   async findByIdempotencyKey(key: string): Promise<WagerTransaction | null> {
     const ormEntity = await this.em.findOne(WagerTransactionOrmEntity, { idempotencyKey: key });
     if (!ormEntity) return null;
@@ -73,6 +82,9 @@ export class PostgresWagerTransactionRepository implements IWagerTransactionRepo
       processedAt: ormEntity.processedAt,
       attempts: ormEntity.attempts,
       nextAttemptAt: ormEntity.nextAttemptAt,
+      resultBalance: ormEntity.resultBalance
+        ? Money.from({ amount: ormEntity.resultBalance, currency: ormEntity.currency })
+        : undefined,
     });
   }
 
@@ -101,6 +113,7 @@ export class PostgresWagerTransactionRepository implements IWagerTransactionRepo
         processedAt: transaction.processedAt,
         attempts: transaction.attempts,
         nextAttemptAt: transaction.nextAttemptAt,
+        resultBalance: transaction.resultBalance?.toString() ?? null,
       });
       this.em.persist(ormEntity);
     } else {
@@ -110,6 +123,7 @@ export class PostgresWagerTransactionRepository implements IWagerTransactionRepo
       ormEntity.processedAt = transaction.processedAt;
       ormEntity.attempts = transaction.attempts;
       ormEntity.nextAttemptAt = transaction.nextAttemptAt;
+      ormEntity.resultBalance = transaction.resultBalance?.toString() ?? null;
     }
 
     await this.em.flush();

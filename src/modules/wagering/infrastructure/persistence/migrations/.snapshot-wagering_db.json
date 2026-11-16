@@ -570,6 +570,23 @@
           "enumItems": [],
           "mappedType": "string"
         },
+        "result_balance": {
+          "name": "result_balance",
+          "type": "numeric(15,2)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": 15,
+          "scale": 2,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "decimal"
+        },
         "round_id": {
           "name": "round_id",
           "type": "varchar(50)",
