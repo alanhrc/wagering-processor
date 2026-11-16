@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect } from 'vitest';
 import { Wallet, InsufficientFundsError } from './wallet.entity';
 import { Money } from '../../../../shared/domain/value-objects/money';
 

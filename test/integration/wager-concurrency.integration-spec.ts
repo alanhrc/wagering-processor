@@ -1,4 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  CreateQueueCommand,
+  DeleteMessageCommand,
+  DeleteQueueCommand,
+  ReceiveMessageCommand,
+  SendMessageCommand,
+  SQSClient,
+} from '@aws-sdk/client-sqs';
 import { ReflectMetadataProvider } from '@mikro-orm/decorators/legacy';
 import { MikroORM } from '@mikro-orm/postgresql';
 import config from '../../mikro-orm.config';
@@ -23,6 +31,10 @@ import { WalletLedgerEntryOrmEntity } from '../../src/modules/wagering/infrastru
 import { WalletOrmEntity } from '../../src/modules/wagering/infrastructure/persistence/entities/wallet.orm-entity';
 import { WagerTransactionOrmEntity } from '../../src/modules/wagering/infrastructure/persistence/entities/wager-transaction.orm-entity';
 import { PostgresUnitOfWork } from '../../src/modules/wagering/infrastructure/persistence/repositories/postgres-uow';
+import { createSqsClient } from '../../src/modules/wagering/infrastructure/messaging/sqs.client';
+import { SqsEventPublisher } from '../../src/modules/wagering/infrastructure/messaging/sqs-event.publisher';
+import { OutboxPublisherWorker } from '../../src/modules/wagering/infrastructure/workers/outbox-publisher.worker';
+import { SqsWagerConsumerWorker } from '../../src/modules/wagering/infrastructure/workers/sqs-wager-consumer.worker';
 
 describe('Wagering Concurrency & Integration Tests', () => {
   let orm: MikroORM | undefined;
@@ -231,5 +243,187 @@ describe('Wagering Concurrency & Integration Tests', () => {
     const finalWallet = await new PostgresWalletRepository(verifyEm).findById(createdWallet.id);
     expect(finalWallet?.balance.toString()).toBe('90.00');
     expect(await verifyEm.count(WagerTransactionOrmEntity, { idempotencyKey: command.idempotencyKey })).toBe(1);
+  });
+
+  it('should publish pending outbox messages once with concurrent publishers', async () => {
+    const sqsClient: SQSClient = createSqsClient();
+    const queueName = `wager-events-integration-${crypto.randomUUID().replaceAll('-', '')}.fifo`;
+    const previousQueueUrl = process.env.AWS_SQS_EVENTS_QUEUE_URL;
+    let queueUrl: string | undefined;
+
+    try {
+      const queue = await sqsClient.send(
+        new CreateQueueCommand({
+          QueueName: queueName,
+          Attributes: {
+            FifoQueue: 'true',
+            ContentBasedDeduplication: 'false',
+          },
+        }),
+      );
+      queueUrl = queue.QueueUrl;
+      if (!queueUrl) throw new Error('LocalStack did not return the integration queue URL');
+      process.env.AWS_SQS_EVENTS_QUEUE_URL = queueUrl;
+
+      const pendingRows = await orm!.em.getConnection().execute<Array<{ count: string }>>(
+        `SELECT COUNT(*) AS count FROM "${schemaName}".outbox_messages WHERE published_at IS NULL`,
+        [],
+        'all',
+      );
+      const expectedMessageCount = Number(pendingRows[0]?.count ?? 0);
+      const publisher = new SqsEventPublisher(sqsClient);
+      const firstWorker = new OutboxPublisherWorker(orm!.em.fork(), publisher);
+      const secondWorker = new OutboxPublisherWorker(orm!.em.fork(), publisher);
+
+      const processedCounts = await Promise.all([
+        firstWorker.processBatch(100),
+        secondWorker.processBatch(100),
+      ]);
+      expect(processedCounts.reduce((total, count) => total + count, 0)).toBe(expectedMessageCount);
+
+      const publishedRows = await orm!.em.getConnection().execute<Array<{ count: string }>>(
+        `SELECT COUNT(*) AS count FROM "${schemaName}".outbox_messages WHERE published_at IS NOT NULL`,
+        [],
+        'all',
+      );
+      expect(Number(publishedRows[0]?.count ?? 0)).toBe(expectedMessageCount);
+
+      let receivedMessageCount = 0;
+      while (receivedMessageCount < expectedMessageCount) {
+        const response = await sqsClient.send(
+          new ReceiveMessageCommand({
+            QueueUrl: queueUrl,
+            MaxNumberOfMessages: 10,
+            WaitTimeSeconds: 1,
+          }),
+        );
+        const messages = response.Messages ?? [];
+        if (messages.length === 0) break;
+        receivedMessageCount += messages.length;
+
+        await Promise.all(
+          messages.flatMap((message) =>
+            message.ReceiptHandle
+              ? [
+                  sqsClient.send(
+                    new DeleteMessageCommand({
+                      QueueUrl: queueUrl,
+                      ReceiptHandle: message.ReceiptHandle,
+                    }),
+                  ),
+                ]
+              : [],
+          ),
+        );
+      }
+      expect(receivedMessageCount).toBe(expectedMessageCount);
+    } finally {
+      if (previousQueueUrl === undefined) {
+        delete process.env.AWS_SQS_EVENTS_QUEUE_URL;
+      } else {
+        process.env.AWS_SQS_EVENTS_QUEUE_URL = previousQueueUrl;
+      }
+      if (queueUrl) {
+        await sqsClient.send(new DeleteQueueCommand({ QueueUrl: queueUrl }));
+      }
+      sqsClient.destroy();
+    }
+  });
+
+  it('should deduplicate redelivered SQS messages through the persistent inbox', async () => {
+    const sqsClient: SQSClient = createSqsClient();
+    const queueName = `wager-transactions-integration-${crypto.randomUUID().replaceAll('-', '')}.fifo`;
+    const previousQueueUrl = process.env.AWS_SQS_QUEUE_URL;
+    let queueUrl: string | undefined;
+
+    try {
+      const queue = await sqsClient.send(
+        new CreateQueueCommand({
+          QueueName: queueName,
+          Attributes: {
+            FifoQueue: 'true',
+            ContentBasedDeduplication: 'false',
+          },
+        }),
+      );
+      queueUrl = queue.QueueUrl;
+      if (!queueUrl) throw new Error('LocalStack did not return the integration queue URL');
+      process.env.AWS_SQS_QUEUE_URL = queueUrl;
+
+      const playerId = crypto.randomUUID();
+      const wallet = await new CreateWalletUseCase(new PostgresUnitOfWork(orm!.em.fork())).execute({
+        playerId,
+        initialBalance: { amount: '100.00', currency: 'BRL' },
+      });
+      const externalTransactionId = crypto.randomUUID();
+      const messageId = crypto.randomUUID();
+      const data = {
+        providerId: 'provider-a',
+        externalTransactionId,
+        idempotencyKey: `provider-a:${externalTransactionId}`,
+        playerId,
+        walletId: wallet.id,
+        roundId: 'round-redelivery',
+        gameId: 'slot-hot',
+        kind: WagerTransactionKind.Bet,
+        money: { amount: '10.00', currency: 'BRL' },
+      };
+      const body = JSON.stringify({
+        messageId,
+        type: 'WagerTransactionRequested',
+        occurredAt: new Date().toISOString(),
+        data,
+      });
+
+      await Promise.all(
+        [0, 1].map((index) =>
+          sqsClient.send(
+            new SendMessageCommand({
+              QueueUrl: queueUrl,
+              MessageBody: body,
+              MessageGroupId: wallet.id,
+              MessageDeduplicationId: `${messageId}-${index}`,
+            }),
+          ),
+        ),
+      );
+
+      const response = await sqsClient.send(
+        new ReceiveMessageCommand({
+          QueueUrl: queueUrl,
+          MaxNumberOfMessages: 10,
+          WaitTimeSeconds: 1,
+        }),
+      );
+      const messages = response.Messages ?? [];
+      expect(messages).toHaveLength(2);
+
+      const consumer = new SqsWagerConsumerWorker(sqsClient, orm!.em.fork());
+      await Promise.all(messages.map((message) => consumer.handleMessage(message)));
+
+      const verifyEm = orm!.em.fork();
+      const finalWallet = await new PostgresWalletRepository(verifyEm).findById(wallet.id);
+      expect(finalWallet?.balance.toString()).toBe('90.00');
+      expect(await verifyEm.count(WagerTransactionOrmEntity, { idempotencyKey: data.idempotencyKey })).toBe(1);
+      expect(await verifyEm.count(WalletLedgerEntryOrmEntity, { walletId: wallet.id })).toBe(2);
+
+      const inboxRows = await orm!.em.getConnection().execute<Array<{ count: string }>>(
+        `SELECT COUNT(*) AS count FROM "${schemaName}".inbox_messages
+         WHERE message_id = ? AND consumer_name = ? AND processed_at IS NOT NULL`,
+        [messageId, 'wagering-sqs-consumer'],
+        'all',
+      );
+      expect(Number(inboxRows[0]?.count ?? 0)).toBe(1);
+    } finally {
+      if (previousQueueUrl === undefined) {
+        delete process.env.AWS_SQS_QUEUE_URL;
+      } else {
+        process.env.AWS_SQS_QUEUE_URL = previousQueueUrl;
+      }
+      if (queueUrl) {
+        await sqsClient.send(new DeleteQueueCommand({ QueueUrl: queueUrl }));
+      }
+      sqsClient.destroy();
+    }
   });
 });

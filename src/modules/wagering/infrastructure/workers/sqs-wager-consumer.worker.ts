@@ -17,6 +17,7 @@ import {
 import { InvalidWagerAmountError } from '../../domain/entities/wager-transaction.entity';
 import { PostgresUnitOfWork } from '../persistence/repositories/postgres-uow';
 import { canonicalJson, hashWagerPayload } from '../../application/hash-wager-payload';
+import { qualifiedTableName } from '../persistence/qualified-table-name';
 
 @Injectable()
 export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
@@ -103,16 +104,17 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
 
     try {
       await fork.transactional(async (txEm) => {
+        const inboxTable = qualifiedTableName(txEm, 'inbox_messages');
         // 1. Inbox Deduplication: tenta inserir; se já existe, verifica se já foi processada
         await txEm.execute(
-          `INSERT INTO inbox_messages (message_id, consumer_name, payload_hash, received_at)
+          `INSERT INTO ${inboxTable} (message_id, consumer_name, payload_hash, received_at)
            VALUES (?, ?, ?, NOW())
            ON CONFLICT (message_id, consumer_name) DO NOTHING`,
           [messageId, this.consumerName, inboxPayloadHash],
         );
 
         const [inboxRow] = await txEm.execute<Array<{ processed_at: Date | null }>>(
-          `SELECT processed_at FROM inbox_messages WHERE message_id = ? AND consumer_name = ? FOR UPDATE`,
+          `SELECT processed_at FROM ${inboxTable} WHERE message_id = ? AND consumer_name = ? FOR UPDATE`,
           [messageId, this.consumerName],
         );
 
@@ -143,7 +145,7 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
 
         // 4. Marca a inbox como processada na mesma transação
         await txEm.execute(
-          `UPDATE inbox_messages SET processed_at = NOW() WHERE message_id = ? AND consumer_name = ?`,
+          `UPDATE ${inboxTable} SET processed_at = NOW() WHERE message_id = ? AND consumer_name = ?`,
           [messageId, this.consumerName],
         );
       });

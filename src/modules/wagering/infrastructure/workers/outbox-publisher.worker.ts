@@ -3,6 +3,7 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import { randomUUID } from 'crypto';
 import { IntegrationEventEnvelope } from '../../domain/events/integration-event';
 import { SqsEventPublisher } from '../messaging/sqs-event.publisher';
+import { qualifiedTableName } from '../persistence/qualified-table-name';
 
 function parseEventEnvelope(payload: unknown): IntegrationEventEnvelope<Record<string, unknown>> {
   const value: unknown = typeof payload === 'string' ? JSON.parse(payload) : payload;
@@ -75,6 +76,7 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
 
   async processBatch(batchSize: number): Promise<number> {
     const fork = this.em.fork();
+    const tableName = qualifiedTableName(fork, 'outbox_messages');
     const lockToken = randomUUID();
     const rows = await fork.transactional(async (txEm) => {
       return txEm.execute<
@@ -86,7 +88,7 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
       >(
         `WITH candidates AS (
            SELECT id
-           FROM outbox_messages
+           FROM ${tableName}
            WHERE published_at IS NULL
              AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
              AND (locked_until IS NULL OR locked_until <= NOW())
@@ -94,7 +96,7 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
            LIMIT ?
            FOR UPDATE SKIP LOCKED
          )
-         UPDATE outbox_messages AS outbox
+         UPDATE ${tableName} AS outbox
          SET lock_token = ?, locked_until = NOW() + INTERVAL '60 seconds'
          FROM candidates
          WHERE outbox.id = candidates.id
@@ -108,7 +110,7 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
         const payload = parseEventEnvelope(row.payload);
         await this.publisher.publish(payload);
         await fork.getConnection().execute(
-          `UPDATE outbox_messages
+          `UPDATE ${tableName}
            SET published_at = NOW(), attempts = attempts + 1, next_attempt_at = NULL,
                lock_token = NULL, locked_until = NULL
            WHERE id = ? AND lock_token = ?`,
@@ -120,7 +122,7 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
         const backoffSeconds = Math.min(2 ** nextAttempts * 2, 300);
 
         await fork.getConnection().execute(
-          `UPDATE outbox_messages
+          `UPDATE ${tableName}
            SET attempts = ?, next_attempt_at = NOW() + MAKE_INTERVAL(secs => ?),
                lock_token = NULL, locked_until = NULL
            WHERE id = ? AND lock_token = ?`,

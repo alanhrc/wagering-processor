@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect } from 'vitest';
 import { Money } from './money';
 
-describe('Money Value Object (Cents-based)', () => {
+describe('Money Value Object (BigInt-based)', () => {
   it('should correctly parse strings into minor units (cents)', () => {
     const m = Money.from({ amount: '25.50', currency: 'BRL' });
     expect(m.toString()).toBe('25.50');
@@ -29,6 +29,20 @@ describe('Money Value Object (Cents-based)', () => {
 
     // O clássico problema do JS (0.1 + 0.2 = 0.30000000000000004) não existe aqui!
     expect(sum.toString()).toBe('0.30');
+  });
+
+  it('should preserve large decimal values without precision loss', () => {
+    const money = Money.from({ amount: '999999999999999999999999.99', currency: 'BRL' });
+
+    expect(money.toJSON()).toEqual({ amount: '999999999999999999999999.99', currency: 'BRL' });
+    expect(money.add(Money.from({ amount: '0.01', currency: 'BRL' })).toString()).toBe(
+      '1000000000000000000000000.00',
+    );
+  });
+
+  it('should keep a fixed two-decimal scale in serialized values', () => {
+    expect(Money.from({ amount: '5', currency: 'BRL' }).toJSON().amount).toBe('5.00');
+    expect(Money.from({ amount: '5.5', currency: 'BRL' }).toJSON().amount).toBe('5.50');
   });
 
   it('should throw error on currency mismatch', () => {

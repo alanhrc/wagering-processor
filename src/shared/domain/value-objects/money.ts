@@ -5,7 +5,7 @@ export interface MoneyProps {
 
 export class Money {
   private constructor(
-    private readonly amountInCents: number,
+    private readonly amountInCents: bigint,
     public readonly currency: string,
   ) {}
 
@@ -23,26 +23,9 @@ export class Money {
     }
 
     // Quebra a string em partes (antes e depois do ponto) para evitar float math
-    const parts = trimmed.split('.');
-    const majorUnits = parseInt(parts[0], 10);
-    let minorUnits = 0;
-
-    if (parts[1]) {
-      // Padroniza para garantir 2 dígitos (ex: "5" vira "50" centavos)
-      const paddedMinor = parts[1].padEnd(2, '0').slice(0, 2);
-      minorUnits = parseInt(paddedMinor, 10);
-    }
-
-    // Calcula o total em centavos respeitando o sinal
-    let totalCents = Math.abs(majorUnits) * 100 + minorUnits;
-    if (majorUnits < 0 || trimmed.startsWith('-')) {
-      totalCents = -totalCents;
-    }
-
-    // Segurança contra estouro de inteiro seguro do JS (Number.MAX_SAFE_INTEGER)
-    if (!Number.isSafeInteger(totalCents)) {
-      throw new Error('Amount exceeds safe integer limits');
-    }
+    const [majorPart, minorPart = ''] = trimmed.split('.');
+    const absoluteCents = BigInt(majorPart.replace('-', '')) * 100n + BigInt(minorPart.padEnd(2, '0'));
+    const totalCents = trimmed.startsWith('-') ? -absoluteCents : absoluteCents;
 
     if (!props.currency || props.currency.trim().length !== 3) {
       throw new Error('Invalid currency: must be a 3-letter ISO-4217 code');
@@ -52,7 +35,7 @@ export class Money {
   }
 
   static zero(currency: string): Money {
-    return new Money(0, currency);
+    return new Money(0n, currency);
   }
 
   public add(other: Money): Money {
@@ -65,16 +48,20 @@ export class Money {
     return new Money(this.amountInCents - other.amountInCents, this.currency);
   }
 
+  public negate(): Money {
+    return new Money(-this.amountInCents, this.currency);
+  }
+
   public isZero(): boolean {
-    return this.amountInCents === 0;
+    return this.amountInCents === 0n;
   }
 
   public isPositive(): boolean {
-    return this.amountInCents > 0;
+    return this.amountInCents > 0n;
   }
 
   public isNegative(): boolean {
-    return this.amountInCents < 0;
+    return this.amountInCents < 0n;
   }
 
   public isLessThan(other: Money): boolean {
@@ -87,11 +74,11 @@ export class Money {
   }
 
   public toString(): string {
-    const absCents = Math.abs(this.amountInCents);
-    const major = Math.floor(absCents / 100);
-    const minor = absCents % 100;
+    const absCents = this.amountInCents < 0n ? -this.amountInCents : this.amountInCents;
+    const major = absCents / 100n;
+    const minor = absCents % 100n;
     const formattedMinor = minor.toString().padStart(2, '0');
-    const sign = this.amountInCents < 0 ? '-' : '';
+    const sign = this.amountInCents < 0n ? '-' : '';
     return `${sign}${major}.${formattedMinor}`;
   }
 
