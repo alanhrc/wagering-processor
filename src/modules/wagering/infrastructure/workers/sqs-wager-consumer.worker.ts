@@ -9,9 +9,7 @@ import {
 import { EntityManager } from '@mikro-orm/postgresql';
 import { createHash } from 'crypto';
 import { ProcessWagerTransactionUseCase } from '../../application/use-cases/process-wager-transaction.use-case';
-import { PostgresWalletRepository } from '../persistence/repositories/postgres-wallet.repository';
-import { PostgresWagerTransactionRepository } from '../persistence/repositories/postgres-wager-transaction.repository';
-import { PostgresWalletLedgerRepository } from '../persistence/repositories/postgres-ledger.repository';
+import { PostgresUnitOfWork } from '../persistence/repositories/postgres-uow';
 
 @Injectable()
 export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
@@ -105,15 +103,9 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
           return;
         }
 
-        // 2. Instancia os repositórios usando o EntityManager da transação atual
-        const walletRepo = new PostgresWalletRepository(txEm);
-        const wagerRepo = new PostgresWagerTransactionRepository(txEm);
-        const ledgerRepo = new PostgresWalletLedgerRepository(txEm);
-        const uow = {
-          transactional: async <T>(work: () => Promise<T>): Promise<T> => work(),
-        };
-
-        const useCase = new ProcessWagerTransactionUseCase(walletRepo, wagerRepo, ledgerRepo, uow);
+        const useCase = new ProcessWagerTransactionUseCase(
+          PostgresUnitOfWork.forCurrentTransaction(txEm),
+        );
 
         // 3. Executa o mesmo caso de uso da API HTTP
         await useCase.execute({

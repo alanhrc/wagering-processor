@@ -19,5 +19,11 @@ export interface IWalletLedgerRepository {
 }
 
 export interface IUnitOfWork {
-  transactional<T>(work: () => Promise<T>): Promise<T>;
+  transactional<T>(work: (repositories: WageringRepositories) => Promise<T>): Promise<T>;
+}
+
+export interface WageringRepositories {
+  wallets: IWalletRepository;
+  wagers: IWagerTransactionRepository;
+  ledger: IWalletLedgerRepository;
 }

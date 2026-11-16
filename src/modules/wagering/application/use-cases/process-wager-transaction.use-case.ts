@@ -2,7 +2,7 @@ import { Money } from '../../../../shared/domain/value-objects/money';
 import { Wallet, InsufficientFundsError } from '../../domain/entities/wallet.entity';
 import { WagerTransaction, WagerTransactionKind, WagerTransactionStatus, FailureCode } from '../../domain/entities/wager-transaction.entity';
 import { WalletLedgerEntry, LedgerDirection } from '../../domain/entities/wallet-ledger-entry.entity';
-import { IWalletRepository, IWagerTransactionRepository, IWalletLedgerRepository, IUnitOfWork } from '../../domain/ports/wagering.repository.interface';
+import { IUnitOfWork } from '../../domain/ports/wagering.repository.interface';
 
 export interface ProcessWagerCommand {
   providerId: string;
@@ -27,39 +27,22 @@ export interface ProcessWagerResult {
 
 export class ProcessWagerTransactionUseCase {
   constructor(
-    private readonly walletRepo: IWalletRepository,
-    private readonly wagerRepo: IWagerTransactionRepository,
-    private readonly ledgerRepo: IWalletLedgerRepository,
     private readonly uow: IUnitOfWork,
   ) {}
 
   async execute(command: ProcessWagerCommand): Promise<ProcessWagerResult> {
     const money = Money.from(command.money);
 
-    // 1. Verificar idempotência fora ou dentro da transação principal
-    const existingTx = await this.wagerRepo.findByIdempotencyKey(command.idempotencyKey);
-    if (existingTx) {
-      if (existingTx.payloadHash !== command.payloadHash) {
-        throw new Error('Idempotency key conflict: same key with different payload');
-      }
-      const wallet = await this.walletRepo.findById(command.walletId);
-      return {
-        transactionId: existingTx.id,
-        status: existingTx.status,
-        balance: wallet ? wallet.balance.toJSON() : { amount: '0.00', currency: money.currency },
-        idempotentReplay: true,
-      };
-    }
-
-    // 2. Executar em transação atômica do banco com lock pessimista
-    return await this.uow.transactional(async () => {
-      // Re-checa idempotência dentro da transação protegida por lock
-      const lockedExisting = await this.wagerRepo.findByIdempotencyKey(command.idempotencyKey);
-      if (lockedExisting) {
-        const wallet = await this.walletRepo.findById(command.walletId);
+    return this.uow.transactional(async ({ wallets, wagers, ledger }) => {
+      const existingTx = await wagers.findByIdempotencyKey(command.idempotencyKey);
+      if (existingTx) {
+        if (existingTx.payloadHash !== command.payloadHash) {
+          throw new Error('Idempotency key conflict: same key with different payload');
+        }
+        const wallet = await wallets.findById(command.walletId);
         return {
-          transactionId: lockedExisting.id,
-          status: lockedExisting.status,
+          transactionId: existingTx.id,
+          status: existingTx.status,
           balance: wallet ? wallet.balance.toJSON() : { amount: '0.00', currency: money.currency },
           idempotentReplay: true,
         };
@@ -82,10 +65,10 @@ export class ProcessWagerTransactionUseCase {
       });
 
       // Buscar wallet com lock pessimista (FOR UPDATE) para evitar concorrência/lost updates
-      const wallet = await this.walletRepo.findByIdWithLock(command.walletId);
+      const wallet = await wallets.findByIdWithLock(command.walletId);
       if (!wallet) {
         transaction.reject(FailureCode.ReferenceNotFound);
-        await this.wagerRepo.save(transaction);
+        await wagers.save(transaction);
         throw new Error(`Wallet not found: ${command.walletId}`);
       }
 
@@ -123,10 +106,10 @@ export class ProcessWagerTransactionUseCase {
         }
 
         // Persistir alterações de domínio na transação SQL
-        await this.walletRepo.save(wallet);
-        await this.wagerRepo.save(transaction);
+        await wallets.save(wallet);
+        await wagers.save(transaction);
         if (ledgerEntry) {
-          await this.ledgerRepo.save(ledgerEntry);
+          await ledger.save(ledgerEntry);
         }
 
         return {
@@ -139,7 +122,7 @@ export class ProcessWagerTransactionUseCase {
       } catch (error) {
         if (error instanceof InsufficientFundsError) {
           transaction.reject(FailureCode.InsufficientFunds);
-          await this.wagerRepo.save(transaction);
+          await wagers.save(transaction);
 
           return {
             transactionId: transaction.id,

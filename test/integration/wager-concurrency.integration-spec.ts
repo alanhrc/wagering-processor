@@ -11,10 +11,8 @@ import {
   WagerTransactionKind,
   WagerTransactionStatus,
 } from '../../src/modules/wagering/domain/entities/wager-transaction.entity';
-import { IUnitOfWork } from '../../src/modules/wagering/domain/ports/wagering.repository.interface';
 import { WalletLedgerEntryOrmEntity } from '../../src/modules/wagering/infrastructure/persistence/entities/wallet-ledger.orm-entity';
-import { PostgresWagerTransactionRepository } from '../../src/modules/wagering/infrastructure/persistence/repositories/postgres-wager-transaction.repository';
-import { PostgresWalletLedgerRepository } from '../../src/modules/wagering/infrastructure/persistence/repositories/postgres-ledger.repository';
+import { PostgresUnitOfWork } from '../../src/modules/wagering/infrastructure/persistence/repositories/postgres-uow';
 
 describe('Wagering Concurrency & Integration Tests', () => {
   let orm: MikroORM | undefined;
@@ -56,26 +54,7 @@ describe('Wagering Concurrency & Integration Tests', () => {
   // Helper para instanciar o Use Case com um EntityManager isolado por requisição
   const createUseCase = () => {
     const em = orm!.em.fork();
-    const walletRepo = new PostgresWalletRepository(em);
-    const wagerRepo = new PostgresWagerTransactionRepository(em);
-    const ledgerRepo = new PostgresWalletLedgerRepository(em);
-
-    // Usa o próprio `em` já isolado para garantir que o lock FOR UPDATE ocorra na mesma conexão
-    const uow: IUnitOfWork = {
-      transactional: async <T>(work: () => Promise<T>): Promise<T> => {
-        await em.begin();
-        try {
-          const result = await work();
-          await em.commit();
-          return result;
-        } catch (error) {
-          await em.rollback();
-          throw error;
-        }
-      },
-    };
-
-    return new ProcessWagerTransactionUseCase(walletRepo, wagerRepo, ledgerRepo, uow);
+    return new ProcessWagerTransactionUseCase(new PostgresUnitOfWork(em));
   };
 
   it('should process concurrent bets correctly: only one succeeds and leaves balance at 20.00 BRL', async () => {
