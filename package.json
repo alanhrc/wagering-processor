@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@mikro-orm/core": "^7.2.9",
+    "@mikro-orm/decorators": "^7.2.9",
     "@mikro-orm/migrations": "^7.2.9",
     "@mikro-orm/postgresql": "^7.2.9",
     "@mikro-orm/reflection": "^7.2.9",
