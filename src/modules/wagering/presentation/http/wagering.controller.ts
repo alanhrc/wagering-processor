@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Headers, HttpCode, HttpStatus, HttpException, Get, Param, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { Controller, Post, Body, Headers, HttpCode, HttpStatus, HttpException, Get, Param, NotFoundException, InternalServerErrorException, Logger, UseGuards } from '@nestjs/common';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import {
   IdempotencyKeyConflictError,
@@ -17,6 +17,8 @@ import { InsufficientFundsError } from '../../domain/entities/wallet.entity';
 import { InvalidWagerAmountError } from '../../domain/entities/wager-transaction.entity';
 import { hashWagerPayload } from '../../application/hash-wager-payload';
 import { InvalidMoneyError } from '../../../../shared/domain/value-objects/money';
+import { WageringMetrics } from '../../../../shared/infrastructure/observability/wagering-metrics';
+import { ProviderIdentityGuard } from '../../../../shared/infrastructure/auth/provider-identity.guard';
 import {
   GetWagerTransactionUseCase,
   WagerTransactionNotFoundError,
@@ -77,11 +79,15 @@ function isWagerRequestBody(value: unknown): value is WagerRequestBody {
 }
 
 @ApiTags('Wagering')
+@UseGuards(ProviderIdentityGuard)
 @Controller('wagering')
 export class WageringController {
+  private readonly logger = new Logger(WageringController.name);
+
   constructor(
     private readonly processWagerUseCase: ProcessWagerTransactionUseCase,
     private readonly getWagerTransactionUseCase: GetWagerTransactionUseCase,
+    private readonly metrics: WageringMetrics,
   ) {}
 
   @Get('transactions/:transactionId')
@@ -232,9 +238,18 @@ export class WageringController {
     };
 
     let result: ProcessWagerResult;
+    const startedAt = performance.now();
     try {
       result = await this.processWagerUseCase.execute(command);
     } catch (error: unknown) {
+      this.metrics.recordDatabaseError(error);
+      this.logger.error('wager_transaction_failed', {
+        event: 'wager_transaction_failed',
+        correlationId: correlationId ?? idempotencyKey,
+        walletId: body.walletId,
+        providerId: body.providerId,
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+      });
       if (error instanceof IdempotencyKeyConflictError) {
         throw new HttpException(
           { code: 'IDEMPOTENCY_KEY_CONFLICT', message: error.message },
@@ -269,7 +284,21 @@ export class WageringController {
         );
       }
       throw new InternalServerErrorException('Transaction processing failed');
+    } finally {
+      this.metrics.recordProcessingDuration(performance.now() - startedAt);
     }
+
+    this.metrics.recordTransaction(result.status);
+    if (result.idempotentReplay) this.metrics.recordDuplicate('http_replay');
+    this.logger.log('wager_transaction_result', {
+      event: 'wager_transaction_result',
+      correlationId: correlationId ?? idempotencyKey,
+      transactionId: result.transactionId,
+      walletId: body.walletId,
+      providerId: body.providerId,
+      status: result.status,
+      idempotentReplay: result.idempotentReplay,
+    });
 
     if (result.status === 'PENDING' || result.status === 'PENDING_REFERENCE') {
       throw new HttpException(result, HttpStatus.ACCEPTED);

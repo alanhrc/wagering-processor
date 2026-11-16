@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { IntegrationEventEnvelope } from '../../domain/events/integration-event';
 import { SqsEventPublisher } from '../messaging/sqs-event.publisher';
 import { qualifiedTableName } from '../persistence/qualified-table-name';
+import { WageringMetrics } from '../../../../shared/infrastructure/observability/wagering-metrics';
 
 function parseEventEnvelope(payload: unknown): IntegrationEventEnvelope<Record<string, unknown>> {
   const value: unknown = typeof payload === 'string' ? JSON.parse(payload) : payload;
@@ -37,17 +38,18 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly em: EntityManager,
     private readonly publisher: SqsEventPublisher,
+    private readonly metrics: WageringMetrics = new WageringMetrics(),
   ) {}
 
   onModuleInit() {
-    this.logger.log('Starting OutboxPublisherWorker...');
+    this.logger.log('outbox_publisher_started', { event: 'outbox_publisher_started' });
     this.timer = setInterval(() => {
       void this.tick();
     }, 500);
   }
 
   async onModuleDestroy() {
-    this.logger.log('Stopping OutboxPublisherWorker (Graceful Shutdown)...');
+    this.logger.log('outbox_publisher_stopping', { event: 'outbox_publisher_stopping' });
     this.isShuttingDown = true;
     if (this.timer) {
       clearInterval(this.timer);
@@ -58,7 +60,7 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
     while (this.isProcessing) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    this.logger.log('OutboxPublisherWorker stopped cleanly.');
+    this.logger.log('outbox_publisher_stopped', { event: 'outbox_publisher_stopped' });
   }
 
   private async tick(): Promise<void> {
@@ -67,8 +69,12 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
 
     try {
       await this.processBatch(20);
-    } catch (error) {
-      this.logger.error('Unexpected error in OutboxPublisherWorker', error);
+    } catch (error: unknown) {
+      this.metrics.recordDatabaseError(error);
+      this.logger.error('outbox_publisher_batch_failed', {
+        event: 'outbox_publisher_batch_failed',
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+      });
     } finally {
       this.isProcessing = false;
     }
@@ -118,8 +124,10 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
           'run',
         );
       } catch (error: unknown) {
+        this.metrics.recordDatabaseError(error);
         const nextAttempts = row.attempts + 1;
         const backoffSeconds = Math.min(2 ** nextAttempts * 2, 300);
+        this.metrics.recordRetry('outbox');
 
         await fork.getConnection().execute(
           `UPDATE ${tableName}
@@ -129,9 +137,15 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
           [nextAttempts, backoffSeconds, row.id, lockToken],
           'run',
         );
-        const errorMessage = error instanceof Error ? error.message : String(error);
         this.logger.warn(
-          `Failed to publish outbox message ${row.id}, scheduled retry in ${backoffSeconds}s: ${errorMessage}`,
+          'outbox_publish_retry_scheduled',
+          {
+            event: 'outbox_publish_retry_scheduled',
+            outboxMessageId: row.id,
+            attempts: nextAttempts,
+            retryDelaySeconds: backoffSeconds,
+            errorType: error instanceof Error ? error.name : 'UnknownError',
+          },
         );
       }
     }

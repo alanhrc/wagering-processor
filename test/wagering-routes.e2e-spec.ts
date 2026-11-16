@@ -19,6 +19,9 @@ import { HealthController } from '../src/modules/wagering/presentation/http/heal
 import { ProviderWageringController } from '../src/modules/wagering/presentation/http/provider-wagering.controller';
 import { WageringController } from '../src/modules/wagering/presentation/http/wagering.controller';
 import { WalletController } from '../src/modules/wagering/presentation/http/wallet.controller';
+import { MetricsController } from '../src/modules/wagering/presentation/http/metrics.controller';
+import { WageringMetrics } from '../src/shared/infrastructure/observability/wagering-metrics';
+import { ProviderIdentityGuard } from '../src/shared/infrastructure/auth/provider-identity.guard';
 
 describe('Wagering HTTP routes (e2e)', () => {
   let app: INestApplication;
@@ -33,15 +36,17 @@ describe('Wagering HTTP routes (e2e)', () => {
 
   beforeAll(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [WalletController, WageringController, ProviderWageringController, HealthController],
+      controllers: [WalletController, WageringController, ProviderWageringController, HealthController, MetricsController],
       providers: [
         { provide: CreateWalletUseCase, useValue: createWallet },
         { provide: ReconcileWalletUseCase, useValue: reconcileWallet },
         { provide: GetWalletQueriesUseCase, useValue: getWalletQueries },
         { provide: ProcessWagerTransactionUseCase, useValue: processWager },
         { provide: GetWagerTransactionUseCase, useValue: getWagerTransaction },
-        { provide: EntityManager, useValue: { getConnection: () => postgresConnection } },
+        { provide: EntityManager, useValue: { config: { getSchema: () => undefined }, getConnection: () => postgresConnection } },
         { provide: SQSClient, useValue: sqsClient },
+        WageringMetrics,
+        ProviderIdentityGuard,
       ],
     }).compile();
 
@@ -61,6 +66,18 @@ describe('Wagering HTTP routes (e2e)', () => {
     const response = await request(app.getHttpServer()).get('/health/live').expect(200);
 
     expect(response.body).toEqual({ status: 'ok' });
+  });
+
+  it('serves Prometheus metrics without exposing financial values', async () => {
+    postgresConnection.execute.mockResolvedValueOnce([{ age_seconds: '2.5' }]);
+    sqsClient.send.mockResolvedValueOnce({ Attributes: { ApproximateNumberOfMessages: '3' } });
+
+    const response = await request(app.getHttpServer()).get('/metrics').expect(200);
+
+    expect(response.text).toContain('wagering_transactions_total{status="PROCESSED"} 0');
+    expect(response.text).toContain('wagering_outbox_oldest_unpublished_seconds 2.5');
+    expect(response.text).toContain('wagering_sqs_dlq_visible_messages 3');
+    expect(response.headers['content-type']).toContain('text/plain');
   });
 
   it('serves GET /health/ready when PostgreSQL and SQS respond', async () => {

@@ -1,11 +1,13 @@
-import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param, UseGuards } from '@nestjs/common';
 import {
   GetWagerTransactionUseCase,
   WagerTransactionNotFoundError,
 } from '../../application/use-cases/get-wager-transaction.use-case';
 import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ProviderIdentityGuard } from '../../../../shared/infrastructure/auth/provider-identity.guard';
 
 @ApiTags('Providers')
+@UseGuards(ProviderIdentityGuard)
 @Controller('providers/:providerId/wagering/transactions')
 export class ProviderWageringController {
   constructor(private readonly getWagerTransactionUseCase: GetWagerTransactionUseCase) {}

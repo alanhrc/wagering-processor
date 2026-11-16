@@ -2,7 +2,7 @@ import { SQSClient } from '@aws-sdk/client-sqs';
 
 export function createSqsClient(): SQSClient {
   return new SQSClient({
-    region: process.env.AWS_REGION || 'us-east-1',
+    region: process.env.AWS_DEFAULT_REGION || process.env.AWS_REGION || 'us-east-1',
     endpoint: process.env.AWS_SQS_ENDPOINT || 'http://localhost:4566',
     credentials: {
       accessKeyId: process.env.AWS_ACCESS_KEY_ID || 'test',

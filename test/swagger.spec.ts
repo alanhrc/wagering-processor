@@ -14,6 +14,8 @@ import { ReconcileWalletUseCase } from '../src/modules/wagering/application/use-
 import { GetWalletQueriesUseCase } from '../src/modules/wagering/application/use-cases/get-wallet-queries.use-case';
 import { ProcessWagerTransactionUseCase } from '../src/modules/wagering/application/use-cases/process-wager-transaction.use-case';
 import { GetWagerTransactionUseCase } from '../src/modules/wagering/application/use-cases/get-wager-transaction.use-case';
+import { WageringMetrics } from '../src/shared/infrastructure/observability/wagering-metrics';
+import { ProviderIdentityGuard } from '../src/shared/infrastructure/auth/provider-identity.guard';
 
 describe('OpenAPI documentation', () => {
   let app: INestApplication;
@@ -29,6 +31,8 @@ describe('OpenAPI documentation', () => {
         { provide: GetWagerTransactionUseCase, useValue: {} },
         { provide: EntityManager, useValue: {} },
         { provide: SQSClient, useValue: {} },
+        WageringMetrics,
+        ProviderIdentityGuard,
       ],
     }).compile();
 

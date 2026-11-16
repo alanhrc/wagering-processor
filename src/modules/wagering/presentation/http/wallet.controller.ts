@@ -11,6 +11,7 @@ import {
   Param,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { CreateWalletUseCase } from '../../application/use-cases/create-wallet.use-case';
@@ -30,6 +31,8 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { ProviderIdentityGuard } from '../../../../shared/infrastructure/auth/provider-identity.guard';
+import { WageringMetrics } from '../../../../shared/infrastructure/observability/wagering-metrics';
 
 function isCreateWalletCommand(value: unknown): value is CreateWalletCommand {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -47,6 +50,7 @@ function isCreateWalletCommand(value: unknown): value is CreateWalletCommand {
 }
 
 @ApiTags('Wallets')
+@UseGuards(ProviderIdentityGuard)
 @Controller('wallets')
 export class WalletController {
   private readonly logger = new Logger(WalletController.name);
@@ -55,6 +59,7 @@ export class WalletController {
     private readonly createWalletUseCase: CreateWalletUseCase,
     private readonly reconcileWalletUseCase: ReconcileWalletUseCase,
     private readonly getWalletQueriesUseCase: GetWalletQueriesUseCase,
+    private readonly metrics: WageringMetrics,
   ) {}
 
   @Get(':walletId')
@@ -167,7 +172,12 @@ export class WalletController {
       throw new BadRequestException({ code: 'INVALID_PAYLOAD', message: 'Invalid wallet creation payload' });
     }
     try {
-      return await this.createWalletUseCase.execute(body);
+      const result = await this.createWalletUseCase.execute(body);
+      this.logger.log('wallet_created', {
+        event: 'wallet_created',
+        walletId: result.id,
+      });
+      return result;
     } catch (error: unknown) {
       if (error instanceof UniqueConstraintViolationException) {
         throw new ConflictException({
@@ -181,6 +191,10 @@ export class WalletController {
       if (error instanceof InvalidInitialWalletBalanceError) {
         throw new BadRequestException({ code: 'INVALID_OPENING_BALANCE', message: error.message });
       }
+      this.logger.error('wallet_creation_failed', {
+        event: 'wallet_creation_failed',
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+      });
       throw error;
     }
   }
@@ -208,16 +222,13 @@ export class WalletController {
     try {
       const result = await this.reconcileWalletUseCase.execute(walletId);
       if (!result.consistent) {
-        this.logger.error(
-          JSON.stringify({
-            event: 'wallet_reconciliation_mismatch',
-            walletId,
-            storedBalance: result.storedBalance,
-            calculatedBalance: result.calculatedBalance,
-            difference: result.difference,
-            checkedEntries: result.checkedEntries,
-          }),
-        );
+        this.metrics.recordReconciliationMismatch();
+        this.logger.error('wallet_reconciliation_mismatch', {
+          event: 'wallet_reconciliation_mismatch',
+          walletId,
+          consistent: false,
+          checkedEntries: result.checkedEntries,
+        });
       }
       return result;
     } catch (error: unknown) {

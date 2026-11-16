@@ -6,6 +6,7 @@ import { WageringController } from './presentation/http/wagering.controller';
 import { WalletController } from './presentation/http/wallet.controller';
 import { ProviderWageringController } from './presentation/http/provider-wagering.controller';
 import { HealthController } from './presentation/http/health.controller';
+import { MetricsController } from './presentation/http/metrics.controller';
 import { CreateWalletUseCase } from './application/use-cases/create-wallet.use-case';
 import { ProcessWagerTransactionUseCase } from './application/use-cases/process-wager-transaction.use-case';
 import { ReconcileWalletUseCase } from './application/use-cases/reconcile-wallet.use-case';
@@ -17,10 +18,14 @@ import { SqsEventPublisher } from './infrastructure/messaging/sqs-event.publishe
 import { OutboxPublisherWorker } from './infrastructure/workers/outbox-publisher.worker';
 import { PendingReferenceWorker } from './infrastructure/workers/pending-reference.worker';
 import { SqsWagerConsumerWorker } from './infrastructure/workers/sqs-wager-consumer.worker';
+import { WageringMetrics } from '../../shared/infrastructure/observability/wagering-metrics';
+import { ProviderIdentityGuard } from '../../shared/infrastructure/auth/provider-identity.guard';
 
 @Module({
-  controllers: [WageringController, WalletController, ProviderWageringController, HealthController],
+  controllers: [WageringController, WalletController, ProviderWageringController, HealthController, MetricsController],
   providers: [
+    WageringMetrics,
+    ProviderIdentityGuard,
     {
       provide: SQSClient,
       useFactory: () => createSqsClient(),

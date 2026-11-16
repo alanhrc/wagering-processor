@@ -58,7 +58,7 @@ export class HealthController {
     };
 
     if (postgres.status === 'rejected' || sqs.status === 'rejected') {
-      this.logger.error(JSON.stringify({ event: 'readiness_check_failed', checks }));
+      this.logger.error('readiness_check_failed', { event: 'readiness_check_failed', checks });
       throw new ServiceUnavailableException({ status: 'error', checks });
     }
 

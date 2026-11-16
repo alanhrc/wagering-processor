@@ -24,6 +24,7 @@ import { MoneyProps, InvalidMoneyError } from '../../../../shared/domain/value-o
 import { PostgresUnitOfWork } from '../persistence/repositories/postgres-uow';
 import { canonicalJson, hashWagerPayload } from '../../application/hash-wager-payload';
 import { qualifiedTableName } from '../persistence/qualified-table-name';
+import { WageringMetrics } from '../../../../shared/infrastructure/observability/wagering-metrics';
 
 interface WagerQueueMessageData {
   providerId: string;
@@ -129,6 +130,7 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly sqsClient: SQSClient,
     private readonly em: EntityManager,
+    private readonly metrics: WageringMetrics = new WageringMetrics(),
   ) {
     this.queueUrl =
       process.env.AWS_SQS_QUEUE_URL ||
@@ -136,17 +138,17 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit() {
-    this.logger.log('Starting SqsWagerConsumerWorker...');
+    this.logger.log('sqs_wager_consumer_started', { event: 'sqs_wager_consumer_started' });
     this.loopPromise = this.pollLoop();
   }
 
   async onModuleDestroy() {
-    this.logger.log('Stopping SqsWagerConsumerWorker (SIGTERM received)...');
+    this.logger.log('sqs_wager_consumer_stopping', { event: 'sqs_wager_consumer_stopping' });
     this.isShuttingDown = true;
     if (this.loopPromise) {
       await this.loopPromise;
     }
-    this.logger.log('SqsWagerConsumerWorker stopped cleanly.');
+    this.logger.log('sqs_wager_consumer_stopped', { event: 'sqs_wager_consumer_stopped' });
   }
 
   private async pollLoop(): Promise<void> {
@@ -173,7 +175,10 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
         }
       } catch (error) {
         if (!this.isShuttingDown) {
-          this.logger.error('Error polling SQS queue', error);
+          this.logger.error('sqs_poll_failed', {
+            event: 'sqs_poll_failed',
+            errorType: error instanceof Error ? error.name : 'UnknownError',
+          });
           await new Promise((resolve) => setTimeout(resolve, 2000));
         }
       }
@@ -182,9 +187,17 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
 
   async handleMessage(msg: Message): Promise<void> {
     if (!msg.Body || !msg.ReceiptHandle) return;
+    const startedAt = performance.now();
+    const messageContext: Record<string, string> = {
+      messageId: msg.MessageId ?? 'unknown',
+    };
     try {
       const parsed = parseWagerQueueMessage(msg.Body, msg.MessageId);
       const { messageId, data } = parsed;
+      messageContext.messageId = messageId;
+      messageContext.correlationId = data.correlationId ?? data.idempotencyKey ?? `${data.providerId}:${data.externalTransactionId}`;
+      messageContext.providerId = data.providerId;
+      messageContext.walletId = data.walletId;
       const inboxPayloadHash = createHash('sha256').update(canonicalJson(parsed)).digest('hex');
       const payloadHash = hashWagerPayload({
         providerId: data.providerId,
@@ -199,6 +212,8 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
       });
       const fork = this.em.fork();
 
+      let duplicateMessage = false;
+      let processedTransaction: Awaited<ReturnType<ProcessWagerTransactionUseCase['execute']>> | undefined;
       await fork.transactional(async (txEm) => {
         const inboxTable = qualifiedTableName(txEm, 'inbox_messages');
         // 1. Inbox Deduplication: tenta inserir; se já existe, verifica se já foi processada
@@ -219,7 +234,7 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
           throw new InvalidSqsWagerMessageError('Message ID was reused with a different payload');
         }
         if (inboxRow.processed_at) {
-          this.logger.debug(`Duplicate SQS message ignored via Inbox: ${messageId}`);
+          duplicateMessage = true;
           return;
         }
 
@@ -228,7 +243,7 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
         );
 
         // 3. Executa o mesmo caso de uso da API HTTP
-        await useCase.execute({
+        processedTransaction = await useCase.execute({
           providerId: data.providerId,
           externalTransactionId: data.externalTransactionId,
           idempotencyKey: data.idempotencyKey || `${data.providerId}:${data.externalTransactionId}`,
@@ -250,6 +265,24 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
         );
       });
 
+      if (duplicateMessage) {
+        this.metrics.recordDuplicate('sqs_inbox');
+        this.logger.log('sqs_duplicate_delivery_ignored', {
+          event: 'sqs_duplicate_delivery_ignored',
+          ...messageContext,
+        });
+      } else if (processedTransaction) {
+        messageContext.transactionId = processedTransaction.transactionId;
+        this.metrics.recordTransaction(processedTransaction.status);
+        if (processedTransaction.idempotentReplay) this.metrics.recordDuplicate('http_replay');
+        this.logger.log('sqs_wager_transaction_committed', {
+          event: 'sqs_wager_transaction_committed',
+          ...messageContext,
+          status: processedTransaction.status,
+          idempotentReplay: processedTransaction.idempotentReplay,
+        });
+      }
+
       // 5. ACK na fila SOMENTE após o COMMIT bem-sucedido no PostgreSQL
       await this.sqsClient.send(
         new DeleteMessageCommand({
@@ -258,6 +291,7 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
         }),
       );
     } catch (error: unknown) {
+      this.metrics.recordDatabaseError(error);
       if (
         error instanceof InternalWagerTransactionError ||
         error instanceof IdempotencyKeyConflictError ||
@@ -267,8 +301,11 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
         error instanceof MissingWagerReferenceError ||
         error instanceof WagerWalletNotFoundError
       ) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        this.logger.warn(`Terminal wager validation error, acknowledging message: ${errorMessage}`);
+        this.logger.warn('sqs_terminal_wager_validation_acknowledged', {
+          event: 'sqs_terminal_wager_validation_acknowledged',
+          ...messageContext,
+          errorType: error instanceof Error ? error.name : 'UnknownError',
+        });
         await this.sqsClient.send(
           new DeleteMessageCommand({
             QueueUrl: this.queueUrl,
@@ -282,9 +319,17 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
       const retryDelaySeconds = error instanceof InvalidSqsWagerMessageError
         ? 0
         : Math.min(2 ** (Number.isFinite(receiveCount) && receiveCount > 0 ? receiveCount : 1), 300);
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Message ${msg.MessageId ?? 'unknown'} failed and will be retried or moved to DLQ: ${errorMessage}`);
+      this.metrics.recordRetry('sqs');
+      this.logger.error('sqs_wager_message_retry_scheduled', {
+        event: 'sqs_wager_message_retry_scheduled',
+        ...messageContext,
+        receiveCount,
+        retryDelaySeconds,
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+      });
       await this.changeVisibility(msg, retryDelaySeconds);
+    } finally {
+      this.metrics.recordProcessingDuration(performance.now() - startedAt);
     }
   }
 

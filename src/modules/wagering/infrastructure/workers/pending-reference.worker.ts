@@ -5,6 +5,7 @@ import {
   ProcessWagerTransactionUseCase,
 } from '../../application/use-cases/process-wager-transaction.use-case';
 import { PostgresWagerTransactionRepository } from '../persistence/repositories/postgres-wager-transaction.repository';
+import { WageringMetrics } from '../../../../shared/infrastructure/observability/wagering-metrics';
 
 @Injectable()
 export class PendingReferenceWorker implements OnModuleInit, OnModuleDestroy {
@@ -16,6 +17,7 @@ export class PendingReferenceWorker implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly em: EntityManager,
     private readonly processWagerTransaction: ProcessWagerTransactionUseCase,
+    private readonly metrics: WageringMetrics = new WageringMetrics(),
   ) {}
 
   onModuleInit(): void {
@@ -46,8 +48,10 @@ export class PendingReferenceWorker implements OnModuleInit, OnModuleDestroy {
 
       for (const transaction of transactions) {
         if (this.isShuttingDown) break;
+        const startedAt = performance.now();
         try {
-          await this.processWagerTransaction.execute({
+          this.metrics.recordRetry('pending_reference');
+          const result = await this.processWagerTransaction.execute({
             providerId: transaction.providerId,
             externalTransactionId: transaction.externalTransactionId,
             idempotencyKey: transaction.idempotencyKey,
@@ -60,12 +64,27 @@ export class PendingReferenceWorker implements OnModuleInit, OnModuleDestroy {
             money: transaction.money.toJSON(),
             referenceExternalTransactionId: transaction.referenceExternalTransactionId,
           });
-        } catch (error) {
-          this.logger.error(`Failed to retry pending reference ${transaction.id}`, error);
+          this.metrics.recordTransaction(result.status);
+        } catch (error: unknown) {
+          this.metrics.recordDatabaseError(error);
+          this.logger.error('pending_reference_retry_failed', {
+            event: 'pending_reference_retry_failed',
+            correlationId: transaction.idempotencyKey,
+            transactionId: transaction.id,
+            walletId: transaction.walletId,
+            providerId: transaction.providerId,
+            errorType: error instanceof Error ? error.name : 'UnknownError',
+          });
+        } finally {
+          this.metrics.recordProcessingDuration(performance.now() - startedAt);
         }
       }
-    } catch (error) {
-      this.logger.error('Error polling pending wager references', error);
+    } catch (error: unknown) {
+      this.metrics.recordDatabaseError(error);
+      this.logger.error('pending_reference_poll_failed', {
+        event: 'pending_reference_poll_failed',
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+      });
     } finally {
       this.isProcessing = false;
     }
