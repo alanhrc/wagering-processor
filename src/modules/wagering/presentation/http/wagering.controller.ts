@@ -1,14 +1,22 @@
-import { Controller, Post, Body, Headers, HttpCode, HttpStatus, HttpException, Get, Param, NotFoundException } from '@nestjs/common';
+import { Controller, Post, Body, Headers, HttpCode, HttpStatus, HttpException, Get, Param, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import {
   IdempotencyKeyConflictError,
   InternalWagerTransactionError,
   InvalidWagerTransactionKindError,
   ProcessWagerTransactionUseCase,
   ProcessWagerCommand,
+  ProcessWagerResult,
+  WagerWalletNotFoundError,
 } from '../../application/use-cases/process-wager-transaction.use-case';
+import {
+  MissingWagerReferenceError,
+  WagerTransactionKind,
+} from '../../domain/entities/wager-transaction.entity';
 import { InsufficientFundsError } from '../../domain/entities/wallet.entity';
 import { InvalidWagerAmountError } from '../../domain/entities/wager-transaction.entity';
 import { hashWagerPayload } from '../../application/hash-wager-payload';
+import { InvalidMoneyError } from '../../../../shared/domain/value-objects/money';
 import {
   GetWagerTransactionUseCase,
   WagerTransactionNotFoundError,
@@ -21,6 +29,52 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+
+type WagerRequestBody = Omit<ProcessWagerCommand, 'idempotencyKey' | 'payloadHash' | 'correlationId'>;
+
+function isWagerTransactionKind(value: unknown): value is WagerTransactionKind {
+  return Object.values(WagerTransactionKind).some((kind) => kind === value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && Boolean(value.trim());
+}
+
+function isWagerRequestBody(value: unknown): value is WagerRequestBody {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+
+  const body = value as Record<string, unknown>;
+  const stringFields = [
+    'providerId',
+    'externalTransactionId',
+    'playerId',
+    'walletId',
+    'roundId',
+    'gameId',
+  ];
+  if (stringFields.some((field) => typeof body[field] !== 'string' || !body[field].trim())) return false;
+  if (!isWagerTransactionKind(body.kind)) return false;
+  if (body.referenceExternalTransactionId !== undefined && !isNonEmptyString(body.referenceExternalTransactionId)) {
+    return false;
+  }
+
+  const money = body.money;
+  const hasMoney = (
+    money !== null &&
+    typeof money === 'object' &&
+    !Array.isArray(money) &&
+    typeof (money as Record<string, unknown>).amount === 'string' &&
+    typeof (money as Record<string, unknown>).currency === 'string'
+  );
+  if (!hasMoney) return false;
+  if (
+    (body.kind === WagerTransactionKind.Refund || body.kind === WagerTransactionKind.Rollback) &&
+    (typeof body.referenceExternalTransactionId !== 'string' || !body.referenceExternalTransactionId.trim())
+  ) {
+    return false;
+  }
+  return true;
+}
 
 @ApiTags('Wagering')
 @Controller('wagering')
@@ -110,7 +164,7 @@ export class WageringController {
   })
   @ApiResponse({
     status: 200,
-    description: 'Transaction result. A repeated request returns the original result with idempotentReplay set to true.',
+    description: 'Transaction processed. A repeated request returns the original result with idempotentReplay set to true.',
     schema: {
       example: {
         transactionId: '0192f298-345e-7e38-af88-e43f851a819d',
@@ -120,17 +174,52 @@ export class WageringController {
       },
     },
   })
+  @ApiResponse({
+    status: 202,
+    description: 'Transaction accepted and waiting for its referenced transaction.',
+    schema: {
+      example: {
+        transactionId: '0192f298-345e-7e38-af88-e43f851a819d',
+        status: 'PENDING_REFERENCE',
+        balance: { amount: '1000.00', currency: 'BRL' },
+        idempotentReplay: false,
+        failureCode: 'REFERENCE_NOT_FOUND',
+      },
+    },
+  })
+  @ApiResponse({
+    status: 422,
+    description: 'The transaction was rejected by a domain rule.',
+    schema: {
+      example: {
+        transactionId: '0192f298-345e-7e38-af88-e43f851a819d',
+        status: 'REJECTED',
+        balance: { amount: '10.00', currency: 'BRL' },
+        idempotentReplay: false,
+        failureCode: 'INSUFFICIENT_FUNDS',
+      },
+    },
+  })
   @ApiResponse({ status: 400, description: 'Required idempotency header or transaction input is invalid.' })
   @ApiResponse({ status: 409, description: 'The idempotency key was already used with a different payload.' })
-  @ApiResponse({ status: 422, description: 'The transaction violates a business rule, such as insufficient funds.' })
+  @ApiResponse({ status: 404, description: 'The wallet does not exist.' })
   @ApiResponse({ status: 500, description: 'Unexpected processing failure.' })
   async submitTransaction(
     @Headers('idempotency-key') idempotencyKey: string,
     @Headers('x-correlation-id') correlationId: string | undefined,
-    @Body() body: Omit<ProcessWagerCommand, 'idempotencyKey' | 'payloadHash' | 'correlationId'>,
+    @Body() body: unknown,
   ) {
     if (!idempotencyKey) {
-      throw new HttpException('Missing required header: Idempotency-Key', HttpStatus.BAD_REQUEST);
+      throw new HttpException(
+        { code: 'IDEMPOTENCY_KEY_REQUIRED', message: 'Missing required header: Idempotency-Key' },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (!isWagerRequestBody(body)) {
+      throw new HttpException(
+        { code: 'INVALID_PAYLOAD', message: 'Invalid wager transaction payload' },
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     const payloadHash = hashWagerPayload(body);
@@ -142,12 +231,27 @@ export class WageringController {
       ...(correlationId ? { correlationId } : {}),
     };
 
+    let result: ProcessWagerResult;
     try {
-      const result = await this.processWagerUseCase.execute(command);
-      return result;
-    } catch (error: any) {
+      result = await this.processWagerUseCase.execute(command);
+    } catch (error: unknown) {
       if (error instanceof IdempotencyKeyConflictError) {
-        throw new HttpException({ error: error.message }, HttpStatus.CONFLICT); // 409
+        throw new HttpException(
+          { code: 'IDEMPOTENCY_KEY_CONFLICT', message: error.message },
+          HttpStatus.CONFLICT,
+        );
+      }
+      if (error instanceof UniqueConstraintViolationException) {
+        throw new HttpException(
+          { code: 'DUPLICATE_TRANSACTION', message: 'The provider transaction already exists.' },
+          HttpStatus.CONFLICT,
+        );
+      }
+      if (error instanceof WagerWalletNotFoundError) {
+        throw new HttpException(
+          { code: 'WALLET_NOT_FOUND', message: error.message },
+          HttpStatus.NOT_FOUND,
+        );
       }
       if (error instanceof InsufficientFundsError) {
         throw new HttpException({ error: error.message }, HttpStatus.UNPROCESSABLE_ENTITY); // 422
@@ -155,11 +259,28 @@ export class WageringController {
       if (
         error instanceof InternalWagerTransactionError ||
         error instanceof InvalidWagerAmountError ||
-        error instanceof InvalidWagerTransactionKindError
+        error instanceof InvalidWagerTransactionKindError ||
+        error instanceof InvalidMoneyError ||
+        error instanceof MissingWagerReferenceError
       ) {
-        throw new HttpException({ error: error.message }, HttpStatus.BAD_REQUEST);
+        throw new HttpException(
+          { code: 'INVALID_PAYLOAD', message: error.message },
+          HttpStatus.BAD_REQUEST,
+        );
       }
-      throw new HttpException({ error: error.message || 'Internal server error' }, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new InternalServerErrorException('Transaction processing failed');
     }
+
+    if (result.status === 'PENDING' || result.status === 'PENDING_REFERENCE') {
+      throw new HttpException(result, HttpStatus.ACCEPTED);
+    }
+    if (result.status === 'REJECTED') {
+      throw new HttpException(result, HttpStatus.UNPROCESSABLE_ENTITY);
+    }
+    if (result.status === 'FAILED') {
+      throw new InternalServerErrorException(result);
+    }
+
+    return result;
   }
 }

@@ -33,6 +33,13 @@ export class IdempotencyKeyConflictError extends Error {
   }
 }
 
+export class WagerWalletNotFoundError extends Error {
+  constructor(walletId: string) {
+    super(`Wallet not found: ${walletId}`);
+    this.name = 'WagerWalletNotFoundError';
+  }
+}
+
 export interface ProcessWagerCommand {
   providerId: string;
   externalTransactionId: string;
@@ -53,6 +60,7 @@ export interface ProcessWagerResult {
   status: WagerTransactionStatus;
   balance: { amount: string; currency: string };
   idempotentReplay: boolean;
+  failureCode?: FailureCode;
 }
 
 export class ProcessWagerTransactionUseCase {
@@ -113,7 +121,7 @@ export class ProcessWagerTransactionUseCase {
 
       const wallet = await wallets.findByIdWithLock(command.walletId);
       if (!wallet) {
-        throw new Error(`Wallet not found: ${command.walletId}`);
+        throw new WagerWalletNotFoundError(command.walletId);
       }
 
       const currentTransaction = await wagers.findByIdempotencyKey(command.idempotencyKey);
@@ -195,6 +203,7 @@ export class ProcessWagerTransactionUseCase {
           return this.persistResult(transaction, wallet.balance, repositories, eventContext, false);
         }
 
+        // A reference can have only one successful reversal across REFUND and ROLLBACK.
         if (
           requiresReference &&
           await wagers.hasSuccessfulReversal(
@@ -275,6 +284,7 @@ export class ProcessWagerTransactionUseCase {
       status: transaction.status,
       balance: balance.toJSON(),
       idempotentReplay,
+      ...(transaction.failureCode ? { failureCode: transaction.failureCode } : {}),
     };
   }
 
@@ -292,7 +302,9 @@ export class ProcessWagerTransactionUseCase {
     eventContext: EventContext,
     idempotentReplay: boolean,
   ): Promise<ProcessWagerResult> {
-    transaction.recordResultBalance(balance);
+    if (balance.currency === transaction.money.currency) {
+      transaction.recordResultBalance(balance);
+    }
     await repositories.wagers.save(transaction);
     if (transaction.status === WagerTransactionStatus.Rejected) {
       await repositories.outbox.enqueue(WagerTransactionRejected.from(transaction, eventContext));

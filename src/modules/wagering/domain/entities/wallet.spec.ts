@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Wallet, InsufficientFundsError } from './wallet.entity';
+import { InvalidInitialWalletBalanceError, Wallet, InsufficientFundsError } from './wallet.entity';
 import { Money } from '../../../../shared/domain/value-objects/money';
 
 describe('Wallet Aggregate Root', () => {
@@ -14,6 +14,16 @@ describe('Wallet Aggregate Root', () => {
     expect(wallet.id).toBe('wallet-123');
     expect(wallet.balance.toString()).toBe('100.00');
     expect(wallet.version).toBe(1);
+  });
+
+  it('should reject a negative opening balance', () => {
+    expect(() =>
+      Wallet.open({
+        id: 'wallet-123',
+        playerId: 'player-456',
+        initialBalance: Money.from({ amount: '-0.01', currency: 'BRL' }),
+      }),
+    ).toThrow(InvalidInitialWalletBalanceError);
   });
 
   it('should successfully debit a valid amount and increment version', () => {

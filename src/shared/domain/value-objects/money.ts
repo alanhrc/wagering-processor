@@ -3,6 +3,13 @@ export interface MoneyProps {
   currency: string; // Ex: "BRL"
 }
 
+export class InvalidMoneyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidMoneyError';
+  }
+}
+
 export class Money {
   private constructor(
     private readonly amountInCents: bigint,
@@ -11,7 +18,7 @@ export class Money {
 
   static from(props: MoneyProps): Money {
     if (!props.amount || typeof props.amount !== 'string') {
-      throw new Error('Invalid amount: must be a non-empty string');
+      throw new InvalidMoneyError('Invalid amount: must be a non-empty string');
     }
 
     const trimmed = props.amount.trim();
@@ -19,7 +26,7 @@ export class Money {
     // Regex estrita: aceita números inteiros ou com 1 a 2 casas decimais (opcionalmente negativo)
     const strictDecimalRegex = /^-?\d+(\.\d{1,2})?$/;
     if (!strictDecimalRegex.test(trimmed)) {
-      throw new Error(`Invalid monetary string format: "${props.amount}". Must be a valid decimal with up to 2 decimal places.`);
+      throw new InvalidMoneyError(`Invalid monetary string format: "${props.amount}". Must be a valid decimal with up to 2 decimal places.`);
     }
 
     // Quebra a string em partes (antes e depois do ponto) para evitar float math
@@ -28,7 +35,7 @@ export class Money {
     const totalCents = trimmed.startsWith('-') ? -absoluteCents : absoluteCents;
 
     if (!props.currency || props.currency.trim().length !== 3) {
-      throw new Error('Invalid currency: must be a 3-letter ISO-4217 code');
+      throw new InvalidMoneyError('Invalid currency: must be a 3-letter ISO-4217 code');
     }
 
     return new Money(totalCents, props.currency.toUpperCase().trim());

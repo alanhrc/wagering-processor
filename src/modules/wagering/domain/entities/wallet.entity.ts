@@ -10,6 +10,13 @@ export interface WalletProps {
   updatedAt: Date;
 }
 
+export class InvalidInitialWalletBalanceError extends Error {
+  constructor() {
+    super('Initial wallet balance cannot be negative');
+    this.name = 'InvalidInitialWalletBalanceError';
+  }
+}
+
 export class Wallet {
   private constructor(
     public readonly id: string,
@@ -34,7 +41,7 @@ export class Wallet {
       throw new Error('Wallet ID and Player ID are required');
     }
     if (props.initialBalance.isNegative()) {
-      throw new Error('Initial wallet balance cannot be negative');
+      throw new InvalidInitialWalletBalanceError();
     }
 
     const now = new Date();

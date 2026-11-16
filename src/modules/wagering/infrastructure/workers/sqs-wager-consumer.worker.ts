@@ -13,11 +13,110 @@ import {
   InternalWagerTransactionError,
   InvalidWagerTransactionKindError,
   ProcessWagerTransactionUseCase,
+  WagerWalletNotFoundError,
 } from '../../application/use-cases/process-wager-transaction.use-case';
-import { InvalidWagerAmountError } from '../../domain/entities/wager-transaction.entity';
+import {
+  InvalidWagerAmountError,
+  MissingWagerReferenceError,
+  WagerTransactionKind,
+} from '../../domain/entities/wager-transaction.entity';
+import { MoneyProps, InvalidMoneyError } from '../../../../shared/domain/value-objects/money';
 import { PostgresUnitOfWork } from '../persistence/repositories/postgres-uow';
 import { canonicalJson, hashWagerPayload } from '../../application/hash-wager-payload';
 import { qualifiedTableName } from '../persistence/qualified-table-name';
+
+interface WagerQueueMessageData {
+  providerId: string;
+  externalTransactionId: string;
+  idempotencyKey?: string;
+  playerId: string;
+  walletId: string;
+  roundId: string;
+  gameId: string;
+  kind: WagerTransactionKind;
+  money: MoneyProps;
+  referenceExternalTransactionId?: string;
+  correlationId?: string;
+}
+
+interface WagerQueueMessage {
+  messageId: string;
+  type: 'WagerTransactionRequested';
+  occurredAt: string;
+  data: WagerQueueMessageData;
+}
+
+class InvalidSqsWagerMessageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidSqsWagerMessageError';
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && Boolean(value.trim());
+}
+
+function parseWagerQueueMessage(body: string, fallbackMessageId?: string): WagerQueueMessage {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new InvalidSqsWagerMessageError('Message body is not valid JSON');
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.data)) {
+    throw new InvalidSqsWagerMessageError('Message body must contain a data object');
+  }
+
+  const data = parsed.data;
+  if (
+    parsed.type !== 'WagerTransactionRequested' ||
+    typeof parsed.occurredAt !== 'string' ||
+    !isNonEmptyString(data.providerId) ||
+    !isNonEmptyString(data.externalTransactionId) ||
+    !isNonEmptyString(data.playerId) ||
+    !isNonEmptyString(data.walletId) ||
+    !isNonEmptyString(data.roundId) ||
+    !isNonEmptyString(data.gameId) ||
+    !Object.values(WagerTransactionKind).some((kind) => kind === data.kind) ||
+    !isRecord(data.money) ||
+    typeof data.money.amount !== 'string' ||
+    typeof data.money.currency !== 'string' ||
+    (data.idempotencyKey !== undefined && typeof data.idempotencyKey !== 'string') ||
+    (data.referenceExternalTransactionId !== undefined && typeof data.referenceExternalTransactionId !== 'string') ||
+    (data.correlationId !== undefined && typeof data.correlationId !== 'string')
+  ) {
+    throw new InvalidSqsWagerMessageError('Message body does not match the wager request contract');
+  }
+
+  const messageId = typeof parsed.messageId === 'string' ? parsed.messageId : fallbackMessageId;
+  if (!messageId) throw new InvalidSqsWagerMessageError('Message ID is missing');
+
+  return {
+    messageId,
+    type: 'WagerTransactionRequested',
+    occurredAt: parsed.occurredAt,
+    data: {
+      providerId: data.providerId,
+      externalTransactionId: data.externalTransactionId,
+      ...(typeof data.idempotencyKey === 'string' ? { idempotencyKey: data.idempotencyKey } : {}),
+      playerId: data.playerId,
+      walletId: data.walletId,
+      roundId: data.roundId,
+      gameId: data.gameId,
+      kind: data.kind as WagerTransactionKind,
+      money: { amount: data.money.amount, currency: data.money.currency },
+      ...(typeof data.referenceExternalTransactionId === 'string'
+        ? { referenceExternalTransactionId: data.referenceExternalTransactionId }
+        : {}),
+      ...(typeof data.correlationId === 'string' ? { correlationId: data.correlationId } : {}),
+    },
+  };
+}
 
 @Injectable()
 export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
@@ -83,26 +182,23 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
 
   async handleMessage(msg: Message): Promise<void> {
     if (!msg.Body || !msg.ReceiptHandle) return;
-
-    const parsed = JSON.parse(msg.Body);
-    const messageId: string = parsed.messageId || msg.MessageId!;
-    const data = parsed.data;
-    const inboxPayloadHash = createHash('sha256').update(canonicalJson(parsed)).digest('hex');
-    const payloadHash = hashWagerPayload({
-      providerId: data.providerId,
-      externalTransactionId: data.externalTransactionId,
-      walletId: data.walletId,
-      playerId: data.playerId,
-      roundId: data.roundId,
-      gameId: data.gameId,
-      kind: data.kind,
-      money: data.money,
-      referenceExternalTransactionId: data.referenceExternalTransactionId,
-    });
-
-    const fork = this.em.fork();
-
     try {
+      const parsed = parseWagerQueueMessage(msg.Body, msg.MessageId);
+      const { messageId, data } = parsed;
+      const inboxPayloadHash = createHash('sha256').update(canonicalJson(parsed)).digest('hex');
+      const payloadHash = hashWagerPayload({
+        providerId: data.providerId,
+        externalTransactionId: data.externalTransactionId,
+        walletId: data.walletId,
+        playerId: data.playerId,
+        roundId: data.roundId,
+        gameId: data.gameId,
+        kind: data.kind,
+        money: data.money,
+        referenceExternalTransactionId: data.referenceExternalTransactionId,
+      });
+      const fork = this.em.fork();
+
       await fork.transactional(async (txEm) => {
         const inboxTable = qualifiedTableName(txEm, 'inbox_messages');
         // 1. Inbox Deduplication: tenta inserir; se já existe, verifica se já foi processada
@@ -113,12 +209,16 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
           [messageId, this.consumerName, inboxPayloadHash],
         );
 
-        const [inboxRow] = await txEm.execute<Array<{ processed_at: Date | null }>>(
-          `SELECT processed_at FROM ${inboxTable} WHERE message_id = ? AND consumer_name = ? FOR UPDATE`,
+        const [inboxRow] = await txEm.execute<Array<{ processed_at: Date | null; payload_hash: string }>>(
+          `SELECT processed_at, payload_hash FROM ${inboxTable} WHERE message_id = ? AND consumer_name = ? FOR UPDATE`,
           [messageId, this.consumerName],
         );
 
-        if (inboxRow?.processed_at) {
+        if (!inboxRow) throw new Error('Inbox row was not available after insert');
+        if (inboxRow.payload_hash !== inboxPayloadHash) {
+          throw new InvalidSqsWagerMessageError('Message ID was reused with a different payload');
+        }
+        if (inboxRow.processed_at) {
           this.logger.debug(`Duplicate SQS message ignored via Inbox: ${messageId}`);
           return;
         }
@@ -157,17 +257,18 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
           ReceiptHandle: msg.ReceiptHandle,
         }),
       );
-    } catch (error: any) {
-      // Se for erro de payload malformado/inválido, fazemos ACK para não ficar em loop infinito (ou enviamos para DLQ)
+    } catch (error: unknown) {
       if (
         error instanceof InternalWagerTransactionError ||
         error instanceof IdempotencyKeyConflictError ||
         error instanceof InvalidWagerTransactionKindError ||
         error instanceof InvalidWagerAmountError ||
-        error.message?.includes('Invalid monetary') ||
-        error.message?.includes('requires a reference')
+        error instanceof InvalidMoneyError ||
+        error instanceof MissingWagerReferenceError ||
+        error instanceof WagerWalletNotFoundError
       ) {
-        this.logger.warn(`Permanent validation error on message ${messageId}, acknowledging to drop: ${error.message}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Terminal wager validation error, acknowledging message: ${errorMessage}`);
         await this.sqsClient.send(
           new DeleteMessageCommand({
             QueueUrl: this.queueUrl,
@@ -177,19 +278,27 @@ export class SqsWagerConsumerWorker implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      // Erros transitórios (ex: banco caiu temporariamente): NÃO fazemos ACK.
-      // O SQS vai reentregar após o VisibilityTimeout e moverá para a DLQ após 3 falhas.
-      this.logger.error(`Transient error processing SQS message ${messageId}, will retry: ${error.message}`);
+      const receiveCount = Number(msg.Attributes?.ApproximateReceiveCount ?? '1');
+      const retryDelaySeconds = error instanceof InvalidSqsWagerMessageError
+        ? 0
+        : Math.min(2 ** (Number.isFinite(receiveCount) && receiveCount > 0 ? receiveCount : 1), 300);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Message ${msg.MessageId ?? 'unknown'} failed and will be retried or moved to DLQ: ${errorMessage}`);
+      await this.changeVisibility(msg, retryDelaySeconds);
     }
   }
 
   private async releaseVisibility(msg: Message): Promise<void> {
+    await this.changeVisibility(msg, 0);
+  }
+
+  private async changeVisibility(msg: Message, visibilityTimeout: number): Promise<void> {
     if (!msg.ReceiptHandle) return;
     await this.sqsClient.send(
       new ChangeMessageVisibilityCommand({
         QueueUrl: this.queueUrl,
         ReceiptHandle: msg.ReceiptHandle,
-        VisibilityTimeout: 0,
+        VisibilityTimeout: visibilityTimeout,
       }),
     );
   }

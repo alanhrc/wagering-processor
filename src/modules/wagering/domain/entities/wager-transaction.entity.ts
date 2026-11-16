@@ -39,6 +39,13 @@ export class InvalidWagerAmountError extends Error {
   }
 }
 
+export class MissingWagerReferenceError extends Error {
+  constructor(kind: WagerTransactionKind) {
+    super(`Transaction kind ${kind} requires a referenceExternalTransactionId`);
+    this.name = 'MissingWagerReferenceError';
+  }
+}
+
 export interface WagerTransactionProps {
   id: string;
   providerId: string;
@@ -92,7 +99,7 @@ export class WagerTransaction {
     }
     // Validação de regra: REFUND e ROLLBACK exigem referência externa
     if ((props.kind === WagerTransactionKind.Refund || props.kind === WagerTransactionKind.Rollback) && !props.referenceExternalTransactionId) {
-      throw new Error(`Transaction kind ${props.kind} requires a referenceExternalTransactionId`);
+      throw new MissingWagerReferenceError(props.kind);
     }
 
     return new WagerTransaction(

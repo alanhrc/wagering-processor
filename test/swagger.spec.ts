@@ -71,6 +71,8 @@ describe('OpenAPI documentation', () => {
       money: { amount: '25.00' },
     });
     expect(submitOperation.responses).toHaveProperty('409');
+    expect(submitOperation.responses).toHaveProperty('202');
+    expect(submitOperation.responses).toHaveProperty('422');
 
     const reconciliationOperation = paths['/wallets/{walletId}/reconciliation']?.post as {
       responses: Record<string, { content?: { 'application/json'?: { schema?: { example?: unknown } } } }>;

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { WagerTransaction, WagerTransactionKind, WagerTransactionStatus, FailureCode } from './wager-transaction.entity';
+import {
+  MissingWagerReferenceError,
+  WagerTransaction,
+  WagerTransactionKind,
+  WagerTransactionStatus,
+} from './wager-transaction.entity';
 import { WalletLedgerEntry, LedgerDirection } from './wallet-ledger-entry.entity';
 import { Money } from '../../../../shared/domain/value-objects/money';
 
@@ -47,7 +52,23 @@ describe('WagerTransaction & Ledger Domain', () => {
         money,
         // Sem referenceExternalTransactionId propositalmente
       });
-    }).toThrow();
+    }).toThrow(MissingWagerReferenceError);
+
+    expect(() => {
+      WagerTransaction.create({
+        id: 'tx-3',
+        providerId: 'prov-a',
+        externalTransactionId: 'ext-125',
+        idempotencyKey: 'prov-a:ext-125',
+        payloadHash: 'abc123hash',
+        walletId: 'w-1',
+        playerId: 'p-1',
+        roundId: 'r-1',
+        gameId: 'slot-1',
+        kind: WagerTransactionKind.Rollback,
+        money,
+      });
+    }).toThrow(MissingWagerReferenceError);
   });
 
   it('should validate ledger balance arithmetic correctly', () => {

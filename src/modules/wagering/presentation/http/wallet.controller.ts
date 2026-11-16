@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Get,
   HttpCode,
@@ -11,8 +12,11 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { CreateWalletUseCase } from '../../application/use-cases/create-wallet.use-case';
 import type { CreateWalletCommand } from '../../application/use-cases/create-wallet.use-case';
+import { InvalidInitialWalletBalanceError } from '../../domain/entities/wallet.entity';
+import { InvalidMoneyError } from '../../../../shared/domain/value-objects/money';
 import { ReconcileWalletUseCase, WalletNotFoundError } from '../../application/use-cases/reconcile-wallet.use-case';
 import {
   GetWalletQueriesUseCase,
@@ -26,6 +30,21 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+
+function isCreateWalletCommand(value: unknown): value is CreateWalletCommand {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const body = value as Record<string, unknown>;
+  const initialBalance = body.initialBalance;
+  return (
+    typeof body.playerId === 'string' &&
+    Boolean(body.playerId.trim()) &&
+    initialBalance !== null &&
+    typeof initialBalance === 'object' &&
+    !Array.isArray(initialBalance) &&
+    typeof (initialBalance as Record<string, unknown>).amount === 'string' &&
+    typeof (initialBalance as Record<string, unknown>).currency === 'string'
+  );
+}
 
 @ApiTags('Wallets')
 @Controller('wallets')
@@ -141,8 +160,29 @@ export class WalletController {
       },
     },
   })
-  create(@Body() body: CreateWalletCommand) {
-    return this.createWalletUseCase.execute(body);
+  @ApiResponse({ status: 409, description: 'A wallet already exists for this player and currency.' })
+  @ApiResponse({ status: 400, description: 'The wallet creation payload or opening balance is invalid.' })
+  async create(@Body() body: unknown) {
+    if (!isCreateWalletCommand(body)) {
+      throw new BadRequestException({ code: 'INVALID_PAYLOAD', message: 'Invalid wallet creation payload' });
+    }
+    try {
+      return await this.createWalletUseCase.execute(body);
+    } catch (error: unknown) {
+      if (error instanceof UniqueConstraintViolationException) {
+        throw new ConflictException({
+          code: 'WALLET_ALREADY_EXISTS',
+          message: 'A wallet already exists for this player and currency',
+        });
+      }
+      if (error instanceof InvalidMoneyError) {
+        throw new BadRequestException({ code: 'INVALID_MONEY', message: error.message });
+      }
+      if (error instanceof InvalidInitialWalletBalanceError) {
+        throw new BadRequestException({ code: 'INVALID_OPENING_BALANCE', message: error.message });
+      }
+      throw error;
+    }
   }
 
   @Post(':walletId/reconciliation')

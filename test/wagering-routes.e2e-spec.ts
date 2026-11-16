@@ -1,13 +1,19 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { INestApplication } from '@nestjs/common';
 import { EntityManager } from '@mikro-orm/postgresql';
+import { UniqueConstraintViolationException } from '@mikro-orm/core';
+import { InvalidInitialWalletBalanceError } from '../src/modules/wagering/domain/entities/wallet.entity';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { CreateWalletUseCase } from '../src/modules/wagering/application/use-cases/create-wallet.use-case';
 import { GetWalletQueriesUseCase } from '../src/modules/wagering/application/use-cases/get-wallet-queries.use-case';
 import { GetWagerTransactionUseCase } from '../src/modules/wagering/application/use-cases/get-wager-transaction.use-case';
-import { ProcessWagerTransactionUseCase } from '../src/modules/wagering/application/use-cases/process-wager-transaction.use-case';
+import {
+  IdempotencyKeyConflictError,
+  ProcessWagerTransactionUseCase,
+  WagerWalletNotFoundError,
+} from '../src/modules/wagering/application/use-cases/process-wager-transaction.use-case';
 import { ReconcileWalletUseCase } from '../src/modules/wagering/application/use-cases/reconcile-wallet.use-case';
 import { HealthController } from '../src/modules/wagering/presentation/http/health.controller';
 import { ProviderWageringController } from '../src/modules/wagering/presentation/http/provider-wagering.controller';
@@ -80,6 +86,27 @@ describe('Wagering HTTP routes (e2e)', () => {
       .expect(201);
 
     expect(response.body).toMatchObject({ id: 'wallet-1', balance: { amount: '100.00', currency: 'BRL' } });
+  });
+
+  it('returns 409 when a wallet violates a database uniqueness constraint', async () => {
+    createWallet.execute.mockRejectedValueOnce(new UniqueConstraintViolationException(new Error('duplicate wallet')));
+
+    const response = await request(app.getHttpServer())
+      .post('/wallets')
+      .send({ playerId: 'player-1', initialBalance: { amount: '100.00', currency: 'BRL' } })
+      .expect(409);
+
+    expect(response.body.message).toBe('A wallet already exists for this player and currency');
+    expect(response.body.code).toBe('WALLET_ALREADY_EXISTS');
+  });
+
+  it('returns 400 when a wallet opening balance is invalid', async () => {
+    createWallet.execute.mockRejectedValueOnce(new InvalidInitialWalletBalanceError());
+
+    await request(app.getHttpServer())
+      .post('/wallets')
+      .send({ playerId: 'player-1', initialBalance: { amount: '-1.00', currency: 'BRL' } })
+      .expect(400);
   });
 
   it('serves GET /wallets/:walletId', async () => {
@@ -171,6 +198,132 @@ describe('Wagering HTTP routes (e2e)', () => {
     await request(app.getHttpServer())
       .post('/wagering/transactions')
       .send({ providerId: 'provider-a' })
+      .expect(400);
+
+    expect(processWager.execute).not.toHaveBeenCalled();
+  });
+
+  it('returns 202 and a machine-readable failure code when a reference is pending', async () => {
+    processWager.execute.mockResolvedValueOnce({
+      transactionId: 'transaction-pending',
+      status: 'PENDING_REFERENCE',
+      balance: { amount: '100.00', currency: 'BRL' },
+      idempotentReplay: false,
+      failureCode: 'REFERENCE_NOT_FOUND',
+    });
+
+    const response = await request(app.getHttpServer())
+      .post('/wagering/transactions')
+      .set('Idempotency-Key', 'provider-a:pending-1')
+      .send({
+        providerId: 'provider-a',
+        externalTransactionId: 'pending-1',
+        playerId: 'player-1',
+        walletId: 'wallet-1',
+        roundId: 'round-1',
+        gameId: 'game-1',
+        kind: 'REFUND',
+        money: { amount: '10.00', currency: 'BRL' },
+        referenceExternalTransactionId: 'bet-1',
+      })
+      .expect(202);
+
+    expect(response.body).toMatchObject({ status: 'PENDING_REFERENCE', failureCode: 'REFERENCE_NOT_FOUND' });
+  });
+
+  it('returns 422 and a machine-readable failure code when a transaction is rejected', async () => {
+    processWager.execute.mockResolvedValueOnce({
+      transactionId: 'transaction-rejected',
+      status: 'REJECTED',
+      balance: { amount: '10.00', currency: 'BRL' },
+      idempotentReplay: false,
+      failureCode: 'INSUFFICIENT_FUNDS',
+    });
+
+    const response = await request(app.getHttpServer())
+      .post('/wagering/transactions')
+      .set('Idempotency-Key', 'provider-a:rejected-1')
+      .send({
+        providerId: 'provider-a',
+        externalTransactionId: 'rejected-1',
+        playerId: 'player-1',
+        walletId: 'wallet-1',
+        roundId: 'round-1',
+        gameId: 'game-1',
+        kind: 'BET',
+        money: { amount: '10.00', currency: 'BRL' },
+      })
+      .expect(422);
+
+    expect(response.body).toMatchObject({ status: 'REJECTED', failureCode: 'INSUFFICIENT_FUNDS' });
+  });
+
+  it('returns 409 when an idempotency key is reused with a different payload', async () => {
+    processWager.execute.mockRejectedValueOnce(new IdempotencyKeyConflictError());
+
+    const response = await request(app.getHttpServer())
+      .post('/wagering/transactions')
+      .set('Idempotency-Key', 'provider-a:conflict-1')
+      .send({
+        providerId: 'provider-a',
+        externalTransactionId: 'conflict-1',
+        playerId: 'player-1',
+        walletId: 'wallet-1',
+        roundId: 'round-1',
+        gameId: 'game-1',
+        kind: 'BET',
+        money: { amount: '10.00', currency: 'BRL' },
+      })
+      .expect(409);
+
+    expect(response.body).toMatchObject({ code: 'IDEMPOTENCY_KEY_CONFLICT' });
+  });
+
+  it('returns 404 with a machine-readable code when a wager wallet does not exist', async () => {
+    processWager.execute.mockRejectedValueOnce(new WagerWalletNotFoundError('wallet-missing'));
+
+    const response = await request(app.getHttpServer())
+      .post('/wagering/transactions')
+      .set('Idempotency-Key', 'provider-a:missing-wallet')
+      .send({
+        providerId: 'provider-a',
+        externalTransactionId: 'missing-wallet',
+        playerId: 'player-1',
+        walletId: 'wallet-missing',
+        roundId: 'round-1',
+        gameId: 'game-1',
+        kind: 'BET',
+        money: { amount: '10.00', currency: 'BRL' },
+      })
+      .expect(404);
+
+    expect(response.body).toMatchObject({ code: 'WALLET_NOT_FOUND' });
+  });
+
+  it('rejects POST /wagering/transactions with a malformed payload before hashing it', async () => {
+    await request(app.getHttpServer())
+      .post('/wagering/transactions')
+      .set('Idempotency-Key', 'provider-a:malformed-1')
+      .send({ providerId: 'provider-a', externalTransactionId: 'malformed-1' })
+      .expect(400);
+
+    expect(processWager.execute).not.toHaveBeenCalled();
+  });
+
+  it('rejects REFUND requests without a reference as an invalid payload', async () => {
+    await request(app.getHttpServer())
+      .post('/wagering/transactions')
+      .set('Idempotency-Key', 'provider-a:missing-reference')
+      .send({
+        providerId: 'provider-a',
+        externalTransactionId: 'missing-reference',
+        playerId: 'player-1',
+        walletId: 'wallet-1',
+        roundId: 'round-1',
+        gameId: 'game-1',
+        kind: 'REFUND',
+        money: { amount: '10.00', currency: 'BRL' },
+      })
       .expect(400);
 
     expect(processWager.execute).not.toHaveBeenCalled();
