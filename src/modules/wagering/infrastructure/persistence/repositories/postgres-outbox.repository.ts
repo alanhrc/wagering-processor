@@ -7,9 +7,12 @@ export class PostgresOutboxRepository implements IOutboxRepository {
 
   async enqueue(event: IntegrationEvent<object>): Promise<void> {
     const envelope = event.toJSON();
+    const schema = this.em.config.getSchema();
+    const quotedSchema = schema?.replaceAll('"', '""');
+    const tableName = quotedSchema ? `"${quotedSchema}".outbox_messages` : 'outbox_messages';
 
     await this.em.getConnection().execute(
-      `INSERT INTO outbox_messages (id, aggregate_id, event_type, payload, occurred_at)
+      `INSERT INTO ${tableName} (id, aggregate_id, event_type, payload, occurred_at)
        VALUES (?, ?, ?, ?::jsonb, ?)`,
       [
         envelope.eventId,
