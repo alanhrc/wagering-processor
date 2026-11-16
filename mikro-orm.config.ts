@@ -2,8 +2,8 @@ import { defineConfig } from '@mikro-orm/postgresql';
 import { TsMorphMetadataProvider } from '@mikro-orm/reflection';
 
 export default defineConfig({
-  entities: ['./dist/**/*.entity.js'],
-  entitiesTs: ['./src/**/*.entity.ts'],
+  entities: ['./dist/**/*.orm-entity.js'],
+  entitiesTs: ['./src/**/*.orm-entity.ts'],
   dbName: process.env.DB_POSTGRES_NAME || 'wagering_db',
   host: process.env.DB_POSTGRES_HOST || 'localhost',
   port: Number(process.env.DB_POSTGRES_PORT) || 5436,
