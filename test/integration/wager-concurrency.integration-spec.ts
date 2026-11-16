@@ -2,11 +2,8 @@ import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
 import { MikroORM } from '@mikro-orm/postgresql';
 import config from '../../mikro-orm.config';
 
-// Entidades ORM (passadas como classe no nativeDelete)
-// Repositórios
 import { PostgresWalletRepository } from '../../src/modules/wagering/infrastructure/persistence/repositories/postgres-wallet.repository';
 
-// Domínio e Caso de Uso
 import { ProcessWagerTransactionUseCase } from '../../src/modules/wagering/application/use-cases/process-wager-transaction.use-case';
 import { Wallet } from '../../src/modules/wagering/domain/entities/wallet.entity';
 import { Money } from '../../src/shared/domain/value-objects/money';
@@ -20,30 +17,45 @@ import { PostgresWagerTransactionRepository } from '../../src/modules/wagering/i
 import { PostgresWalletLedgerRepository } from '../../src/modules/wagering/infrastructure/persistence/repositories/postgres-ledger.repository';
 
 describe('Wagering Concurrency & Integration Tests', () => {
-  let orm: MikroORM;
+  let orm: MikroORM | undefined;
+  const dbName = process.env.DB_POSTGRES_NAME || 'wagering_db';
+  const dbPort = parseInt(process.env.DB_POSTGRES_PORT || '5436');
+  const keepTestSchema = process.env.KEEP_TEST_SCHEMA === 'true';
+  const schemaName = keepTestSchema
+    ? 'wagering_integration_audit'
+    : `wagering_integration_${crypto.randomUUID().replaceAll('-', '')}`;
 
   beforeEach(async () => {
     if (!orm) {
       orm = await MikroORM.init({
         ...config,
-        dbName: 'wagering_db',
-        clientUrl: 'postgresql://postgres:postgres@localhost:5436/wagering_db',
+        dbName: dbName,
+        host: 'localhost',
+        port: dbPort,
+        schema: schemaName,
+        migrations: { ...config.migrations, snapshot: false },
       });
-    }
 
-    const em = orm.em.fork();
-    await em.getConnection().execute('TRUNCATE TABLE wallet_ledger_entries, wager_transactions, wallets CASCADE');
+      await orm.em.getConnection().execute(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
+      await orm.migrator.up({ schema: schemaName });
+    }
   });
 
   afterAll(async () => {
     if (orm) {
-      await orm.close(true);
+      try {
+        if (!keepTestSchema) {
+          await orm.em.getConnection().execute(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`);
+        }
+      } finally {
+        await orm.close(true);
+      }
     }
   });
 
   // Helper para instanciar o Use Case com um EntityManager isolado por requisição
   const createUseCase = () => {
-    const em = orm.em.fork();
+    const em = orm!.em.fork();
     const walletRepo = new PostgresWalletRepository(em);
     const wagerRepo = new PostgresWagerTransactionRepository(em);
     const ledgerRepo = new PostgresWalletLedgerRepository(em);
@@ -67,14 +79,16 @@ describe('Wagering Concurrency & Integration Tests', () => {
   };
 
   it('should process concurrent bets correctly: only one succeeds and leaves balance at 20.00 BRL', async () => {
-    const setupEm = orm.em.fork();
+    const setupEm = orm!.em.fork();
     const setupWalletRepo = new PostgresWalletRepository(setupEm);
 
     // 1. Criar carteira com 100.00 BRL
-    const walletId = 'wallet-test-concurrency';
+    const runId = crypto.randomUUID();
+    const playerId = crypto.randomUUID();
+    const walletId = crypto.randomUUID();
     const initialWallet = Wallet.open({
       id: walletId,
-      playerId: 'player-999',
+      playerId,
       initialBalance: Money.from({ amount: '100.00', currency: 'BRL' }),
     });
     await setupWalletRepo.save(initialWallet);
@@ -85,11 +99,11 @@ describe('Wagering Concurrency & Integration Tests', () => {
 
     const promise1 = useCase1.execute({
       providerId: 'provider-a',
-      externalTransactionId: 'tx-80-one',
-      idempotencyKey: 'prov:tx-80-one',
+      externalTransactionId: `${runId}-one`,
+      idempotencyKey: `prov:${runId}-one`,
       payloadHash: 'hash1',
       walletId,
-      playerId: 'player-999',
+      playerId,
       roundId: 'round-1',
       gameId: 'slot-hot',
       kind: WagerTransactionKind.Bet,
@@ -98,11 +112,11 @@ describe('Wagering Concurrency & Integration Tests', () => {
 
     const promise2 = useCase2.execute({
       providerId: 'provider-a',
-      externalTransactionId: 'tx-80-two',
-      idempotencyKey: 'prov:tx-80-two',
+      externalTransactionId: `${runId}-two`,
+      idempotencyKey: `prov:${runId}-two`,
       payloadHash: 'hash2',
       walletId,
-      playerId: 'player-999',
+      playerId,
       roundId: 'round-1',
       gameId: 'slot-hot',
       kind: WagerTransactionKind.Bet,
@@ -119,7 +133,7 @@ describe('Wagering Concurrency & Integration Tests', () => {
     expect(rejectedCount).toBe(1);
 
     // 4. Validar saldo final da carteira no banco
-    const verifyEm = orm.em.fork();
+    const verifyEm = orm!.em.fork();
     const verifyWalletRepo = new PostgresWalletRepository(verifyEm);
     const finalWallet = await verifyWalletRepo.findById(walletId);
     expect(finalWallet?.balance.toString()).toBe('20.00');
