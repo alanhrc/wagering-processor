@@ -6,6 +6,7 @@ import { WageringController } from './presentation/http/wagering.controller';
 import { WalletController } from './presentation/http/wallet.controller';
 import { CreateWalletUseCase } from './application/use-cases/create-wallet.use-case';
 import { ProcessWagerTransactionUseCase } from './application/use-cases/process-wager-transaction.use-case';
+import { ReconcileWalletUseCase } from './application/use-cases/reconcile-wallet.use-case';
 import { PostgresUnitOfWork } from './infrastructure/persistence/repositories/postgres-uow';
 import { createSqsClient } from './infrastructure/messaging/sqs.client';
 import { SqsEventPublisher } from './infrastructure/messaging/sqs-event.publisher';
@@ -35,6 +36,11 @@ import { SqsWagerConsumerWorker } from './infrastructure/workers/sqs-wager-consu
       provide: CreateWalletUseCase,
       inject: [EntityManager],
       useFactory: (em: EntityManager) => new CreateWalletUseCase(new PostgresUnitOfWork(em)),
+    },
+    {
+      provide: ReconcileWalletUseCase,
+      inject: [EntityManager],
+      useFactory: (em: EntityManager) => new ReconcileWalletUseCase(new PostgresUnitOfWork(em)),
     },
   ],
 })

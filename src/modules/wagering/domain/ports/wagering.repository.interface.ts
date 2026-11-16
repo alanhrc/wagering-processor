@@ -24,6 +24,14 @@ export interface IWagerTransactionRepository {
 
 export interface IWalletLedgerRepository {
   save(entry: WalletLedgerEntry): Promise<void>;
+  reconcile(walletId: string): Promise<WalletLedgerReconciliationSnapshot | null>;
+}
+
+export interface WalletLedgerReconciliationSnapshot {
+  currency: string;
+  storedBalance: string;
+  calculatedBalance: string;
+  checkedEntries: number;
 }
 
 export interface IOutboxRepository {

@@ -35,6 +35,7 @@ import { createSqsClient } from '../../src/modules/wagering/infrastructure/messa
 import { SqsEventPublisher } from '../../src/modules/wagering/infrastructure/messaging/sqs-event.publisher';
 import { OutboxPublisherWorker } from '../../src/modules/wagering/infrastructure/workers/outbox-publisher.worker';
 import { SqsWagerConsumerWorker } from '../../src/modules/wagering/infrastructure/workers/sqs-wager-consumer.worker';
+import { ReconcileWalletUseCase } from '../../src/modules/wagering/application/use-cases/reconcile-wallet.use-case';
 
 describe('Wagering Concurrency & Integration Tests', () => {
   let orm: MikroORM | undefined;
@@ -425,5 +426,39 @@ describe('Wagering Concurrency & Integration Tests', () => {
       }
       sqsClient.destroy();
     }
+  });
+
+  it('should report a ledger mismatch without modifying the stored wallet balance', async () => {
+    const playerId = crypto.randomUUID();
+    const wallet = await new CreateWalletUseCase(new PostgresUnitOfWork(orm!.em.fork())).execute({
+      playerId,
+      initialBalance: { amount: '100.00', currency: 'BRL' },
+    });
+    const reconcileWallet = new ReconcileWalletUseCase(new PostgresUnitOfWork(orm!.em.fork()));
+
+    const consistentResult = await reconcileWallet.execute(wallet.id);
+    expect(consistentResult).toEqual({
+      walletId: wallet.id,
+      storedBalance: { amount: '100.00', currency: 'BRL' },
+      calculatedBalance: { amount: '100.00', currency: 'BRL' },
+      difference: { amount: '0.00', currency: 'BRL' },
+      consistent: true,
+      checkedEntries: 1,
+    });
+
+    await orm!.em.getConnection().execute(
+      `UPDATE "${schemaName}".wallets SET balance = '95.00' WHERE id = ?`,
+      [wallet.id],
+    );
+    const mismatchResult = await reconcileWallet.execute(wallet.id);
+
+    expect(mismatchResult.storedBalance.amount).toBe('95.00');
+    expect(mismatchResult.calculatedBalance.amount).toBe('100.00');
+    expect(mismatchResult.difference.amount).toBe('-5.00');
+    expect(mismatchResult.consistent).toBe(false);
+    expect(mismatchResult.checkedEntries).toBe(1);
+
+    const storedWallet = await new PostgresWalletRepository(orm!.em.fork()).findById(wallet.id);
+    expect(storedWallet?.balance.toString()).toBe('95.00');
   });
 });
