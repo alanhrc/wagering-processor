@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EntityManager } from '@mikro-orm/postgresql';
@@ -16,7 +16,6 @@ import { ProcessWagerTransactionUseCase } from '../src/modules/wagering/applicat
 import { GetWagerTransactionUseCase } from '../src/modules/wagering/application/use-cases/get-wager-transaction.use-case';
 import { WageringMetrics } from '../src/shared/infrastructure/observability/wagering-metrics';
 import { AuthController } from '../src/modules/authentication/presentation/http/auth.controller';
-import { AuthenticateUserUseCase, RegisterUserUseCase } from '../src/modules/authentication/application/authentication.use-cases';
 
 describe('OpenAPI documentation', () => {
   let app: INestApplication;
@@ -33,8 +32,6 @@ describe('OpenAPI documentation', () => {
         { provide: EntityManager, useValue: {} },
         { provide: SQSClient, useValue: {} },
         WageringMetrics,
-        { provide: RegisterUserUseCase, useValue: { execute: vi.fn() } },
-        { provide: AuthenticateUserUseCase, useValue: { execute: vi.fn() } },
       ],
     }).compile();
 
@@ -53,8 +50,6 @@ describe('OpenAPI documentation', () => {
     const paths = response.body.paths as Record<string, Record<string, unknown>>;
 
     expect(Object.keys(paths).sort()).toEqual([
-      '/auth/login',
-      '/auth/register',
       '/auth/session',
       '/health/live',
       '/health/ready',
@@ -83,11 +78,9 @@ describe('OpenAPI documentation', () => {
     expect(submitOperation.responses).toHaveProperty('202');
     expect(submitOperation.responses).toHaveProperty('422');
 
-    const registration = paths['/auth/register']?.post as { responses: Record<string, unknown> };
-    expect(registration.responses).toHaveProperty('201');
-    expect(registration.responses).toHaveProperty('409');
-    const session = paths['/auth/session']?.post as { security: Array<Record<string, string[]>> };
+    const session = paths['/auth/session']?.get as { security: Array<Record<string, string[]>> };
     expect(session.security).toContainEqual({ bearer: [] });
+    expect(response.body.components.securitySchemes.bearer.flows.authorizationCode).toHaveProperty('authorizationUrl');
 
     const reconciliationOperation = paths['/wallets/{walletId}/reconciliation']?.post as {
       responses: Record<string, { content?: { 'application/json'?: { schema?: { example?: unknown } } } }>;

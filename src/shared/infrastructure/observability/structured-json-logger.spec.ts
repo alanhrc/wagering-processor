@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, jest } from 'bun:test';
 import { StructuredJsonLogger } from './structured-json-logger';
 
 describe('StructuredJsonLogger', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => jest.restoreAllMocks());
 
   it('writes JSON with UTC time and omits financial values and payloads', () => {
-    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const output = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
 
     new StructuredJsonLogger().log('wager_processed', {
       event: 'wager_processed',

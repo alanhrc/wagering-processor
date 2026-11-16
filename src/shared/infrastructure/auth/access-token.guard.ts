@@ -1,25 +1,21 @@
-import { CanActivate, ExecutionContext, Injectable, SetMetadata, UnauthorizedException } from '@nestjs/common';
+import { Inject, CanActivate, ExecutionContext, Injectable, SetMetadata, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { JwtService } from '@nestjs/jwt';
+import { ACCESS_TOKEN_VERIFIER } from '../../../modules/authentication/application/access-token-verifier.port.js';
+import type { AccessTokenVerifier, AuthenticatedIdentity } from '../../../modules/authentication/application/access-token-verifier.port.js';
 import type { Request } from 'express';
 
 const IS_PUBLIC = 'isPublic';
 
 export const Public = () => SetMetadata(IS_PUBLIC, true);
 
-interface AccessTokenPayload {
-  sub: string;
-  email: string;
-}
-
 interface AuthenticatedRequest extends Request {
-  user?: { id: string; email: string };
+  user?: AuthenticatedIdentity;
 }
 
 @Injectable()
 export class AccessTokenGuard implements CanActivate {
   constructor(
-    private readonly jwt: JwtService,
+    @Inject(ACCESS_TOKEN_VERIFIER) private readonly verifier: AccessTokenVerifier,
     private readonly reflector: Reflector,
   ) {}
 
@@ -30,12 +26,10 @@ export class AccessTokenGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const authorization = request.headers.authorization;
     const [scheme, token] = authorization?.split(' ') ?? [];
-    if (scheme !== 'Bearer' || !token) throw new UnauthorizedException('A valid bearer token is required');
+    if (scheme !== 'Bearer' || !token || authorization?.split(' ').length !== 2) throw new UnauthorizedException('A valid bearer token is required');
 
     try {
-      const payload = await this.jwt.verifyAsync<AccessTokenPayload>(token);
-      if (!payload.sub || !payload.email) throw new UnauthorizedException('A valid bearer token is required');
-      request.user = { id: payload.sub, email: payload.email };
+      request.user = await this.verifier.verify(token);
       return true;
     } catch {
       throw new UnauthorizedException('A valid bearer token is required');

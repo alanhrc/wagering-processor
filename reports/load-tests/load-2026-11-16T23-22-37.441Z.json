@@ -1,0 +1,78 @@
+{
+  "generatedAt": "2026-11-16T23:22:37.441Z",
+  "environment": {
+    "runtime": "Bun 1.4.4",
+    "platform": "darwin/arm64",
+    "cpuCount": 12,
+    "memoryBytes": 97010600,
+    "postgresHost": "localhost",
+    "postgresPort": 5436,
+    "postgresDatabase": "wagering_db",
+    "schema": "wagering_load_23235b186ce1407cb36fdc7034feeeda",
+    "schemaRetained": true,
+    "sqsEndpointHost": "localhost",
+    "queueNames": {
+      "deadLetter": "wager-load-dlq-61bb6c09926f4031a00044bfa48b98ba.fifo",
+      "wagers": "wager-load-input-61bb6c09926f4031a00044bfa48b98ba.fifo",
+      "events": "wager-load-events-61bb6c09926f4031a00044bfa48b98ba.fifo"
+    }
+  },
+  "methodology": {
+    "endpoint": "POST /wagering/transactions",
+    "operation": "BET of 0.01 BRL per request against one shared wallet opened at 1000.00 BRL",
+    "financialWrites": "Each accepted request debits the wallet and appends one immutable ledger entry.",
+    "authentication": "Keycloak service account using client_credentials and an RS256 access token",
+    "idempotency": "Unique Idempotency-Key per measured request",
+    "requests": 500,
+    "warmupRequests": 10,
+    "concurrency": 25,
+    "note": "This is a local benchmark; the challenge defines no target RPS."
+  },
+  "results": {
+    "completed": 500,
+    "succeeded": 500,
+    "failed": 0,
+    "errorRate": 0,
+    "throughputRequestsPerSecond": 485.07001026614785,
+    "durationMs": 1030.779041,
+    "latencyMs": {
+      "p50": 47.16995799999995,
+      "p95": 78.94816699999978,
+      "p99": 94.21766600000001,
+      "min": 18.427124999999933,
+      "max": 118.19191599999999
+    },
+    "statusCounts": {
+      "200": 500
+    },
+    "sampleErrors": [],
+    "databaseLockConflictDelta": 0,
+    "outboxLagSeconds": {
+      "before": 0.057225,
+      "maximumSampled": 0.856013,
+      "after": 1.042546
+    },
+    "reconciliation": {
+      "httpStatus": 200,
+      "consistent": true,
+      "checkedEntries": 511
+    },
+    "wallet": {
+      "httpStatus": 200,
+      "expectedBalance": {
+        "amount": "994.90",
+        "currency": "BRL"
+      },
+      "actualBalance": {
+        "amount": "994.90",
+        "currency": "BRL"
+      },
+      "matchesExpectedBalance": true
+    }
+  },
+  "cleanup": {
+    "schemaDropped": false,
+    "queuesDeleted": true,
+    "applicationStopped": true
+  }
+}

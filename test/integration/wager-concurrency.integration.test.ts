@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { rejects } from 'node:assert/strict';
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
@@ -18,12 +19,8 @@ import { Migration20261115000000 } from '../../src/modules/wagering/infrastructu
 import { Migration20261116000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261116000000';
 import { Migration20261117000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261117000000';
 import { Migration20261118000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261118000000';
+import { Migration20261120000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261120000000';
 import { Migration20261119000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261119000000';
-import { AuthUserOrmEntity } from '../../src/modules/authentication/infrastructure/persistence/auth-user.orm-entity';
-import { PostgresAuthUserRepository } from '../../src/modules/authentication/infrastructure/persistence/postgres-auth-user.repository';
-import { Argon2PasswordHasher } from '../../src/modules/authentication/infrastructure/argon2-password.hasher';
-import { SeedInitialUserUseCase } from '../../src/modules/authentication/application/seed-initial-user.use-case';
-import { InitialUserSeeder } from '../../src/modules/authentication/infrastructure/initial-user-seeder';
 
 import { PostgresWalletRepository } from '../../src/modules/wagering/infrastructure/persistence/repositories/postgres-wallet.repository';
 
@@ -57,13 +54,11 @@ describe('Wagering Concurrency & Integration Tests', () => {
   const dbName = process.env.DB_POSTGRES_NAME || 'wagering_db';
   const dbPort = parseInt(process.env.DB_POSTGRES_PORT || '5436');
   const keepTestSchema = process.env.KEEP_TEST_SCHEMA === 'true';
-  const schemaName = keepTestSchema
-    ? 'wagering_integration_audit'
-    : `wagering_integration_${crypto.randomUUID().replaceAll('-', '')}`;
+  const schemaName = `wagering_integration_${crypto.randomUUID().replaceAll('-', '')}`;
   const createOrmConnection = (schema = schemaName) =>
     MikroORM.init({
       ...config,
-      entities: [WalletOrmEntity, WagerTransactionOrmEntity, WalletLedgerEntryOrmEntity, AuthUserOrmEntity],
+      entities: [WalletOrmEntity, WagerTransactionOrmEntity, WalletLedgerEntryOrmEntity],
       entitiesTs: [],
       metadataProvider: ReflectMetadataProvider,
       dbName,
@@ -79,12 +74,14 @@ describe('Wagering Concurrency & Integration Tests', () => {
           Migration20261117000000,
           Migration20261118000000,
           Migration20261119000000,
+          Migration20261120000000,
         ],
       },
     });
 
   beforeAll(async () => {
     if (!orm) {
+      process.stdout.write(`[integration] schema=${schemaName} retained=${keepTestSchema}\n`);
       orm = await createOrmConnection();
 
       await orm.em.getConnection().execute(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
@@ -101,41 +98,6 @@ describe('Wagering Concurrency & Integration Tests', () => {
       } finally {
         await orm.close(true);
       }
-    }
-  });
-
-  it('should seed the configured user into PostgreSQL with Argon2id without replacing an existing password', async () => {
-    const originalEmail = process.env.AUTH_SEED_EMAIL;
-    const originalPassword = process.env.AUTH_SEED_PASSWORD;
-    const email = `seed-${crypto.randomUUID()}@example.test`;
-    const initialPassword = 'initial-seed-password-long';
-    const repository = new PostgresAuthUserRepository(orm!.em);
-    const hasher = new Argon2PasswordHasher();
-    const seeder = new InitialUserSeeder(new SeedInitialUserUseCase(repository, hasher));
-
-    process.env.AUTH_SEED_EMAIL = email;
-    process.env.AUTH_SEED_PASSWORD = initialPassword;
-
-    try {
-      await seeder.onModuleInit();
-
-      const persistedUser = await repository.findByEmail(email);
-      expect(persistedUser).toBeDefined();
-      expect(persistedUser?.passwordHash).not.toBe(initialPassword);
-      expect(await hasher.verify(persistedUser!.passwordHash, initialPassword)).toBe(true);
-
-      process.env.AUTH_SEED_PASSWORD = 'replacement-seed-password-long';
-      await seeder.onModuleInit();
-
-      const unchangedUser = await repository.findByEmail(email);
-      expect(unchangedUser?.passwordHash).toBe(persistedUser?.passwordHash);
-      expect(await hasher.verify(unchangedUser!.passwordHash, initialPassword)).toBe(true);
-      expect(await hasher.verify(unchangedUser!.passwordHash, 'replacement-seed-password-long')).toBe(false);
-    } finally {
-      if (originalEmail === undefined) delete process.env.AUTH_SEED_EMAIL;
-      else process.env.AUTH_SEED_EMAIL = originalEmail;
-      if (originalPassword === undefined) delete process.env.AUTH_SEED_PASSWORD;
-      else process.env.AUTH_SEED_PASSWORD = originalPassword;
     }
   });
 
@@ -586,24 +548,24 @@ describe('Wagering Concurrency & Integration Tests', () => {
       initialBalance: { amount: '100.00', currency: 'BRL' },
     });
 
-    await expect(
-      createWallet.execute({ playerId, initialBalance: { amount: '0.00', currency: 'BRL' } }),
-    ).rejects.toThrow();
-    await expect(
-      orm!.em.getConnection().execute(
+    await rejects(
+      async () => createWallet.execute({ playerId, initialBalance: { amount: '0.00', currency: 'BRL' } }),
+    );
+    await rejects(
+      async () => orm!.em.getConnection().execute(
         `UPDATE "${schemaName}".wallets SET balance = '-1.00' WHERE id = ?`,
         [wallet.id],
       ),
-    ).rejects.toThrow();
+    );
 
     const ledger = await orm!.em.fork().findOne(WalletLedgerEntryOrmEntity, { walletId: wallet.id });
     if (!ledger) throw new Error('Opening wallet did not create its ledger entry');
-    await expect(
-      orm!.em.getConnection().execute(
+    await rejects(
+      async () => orm!.em.getConnection().execute(
         `UPDATE "${schemaName}".wallet_ledger_entries SET amount = '99.00' WHERE id = ?`,
         [ledger.id],
       ),
-    ).rejects.toThrow();
+    );
 
     const lossId = crypto.randomUUID();
     await createUseCase().execute({
@@ -618,14 +580,14 @@ describe('Wagering Concurrency & Integration Tests', () => {
       kind: WagerTransactionKind.Loss,
       money: { amount: '10.00', currency: 'BRL' },
     });
-    await expect(
-      orm!.em.getConnection().execute(
+    await rejects(
+      async () => orm!.em.getConnection().execute(
         `INSERT INTO "${schemaName}".wallet_ledger_entries
          (id, wallet_id, transaction_id, direction, amount, currency, balance_before, balance_after)
          VALUES (?, ?, ?, 'DEBIT', '10.00', 'BRL', '100.00', '95.00')`,
         [crypto.randomUUID(), wallet.id, lossId],
       ),
-    ).rejects.toThrow();
+    );
 
     const verifyEm = orm!.em.fork();
     const finalWallet = await new PostgresWalletRepository(verifyEm).findById(wallet.id);
@@ -641,26 +603,13 @@ describe('Wagering Concurrency & Integration Tests', () => {
     try {
       await migrationOrm.em.getConnection().execute(`CREATE SCHEMA "${migrationSchema}"`);
       await migrationOrm.migrator.up({ schema: migrationSchema });
-      expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(5);
+      expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(6);
       const authTable = await migrationOrm.em.getConnection().execute<Array<{ table_name: string }>>(
         `SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'auth_users'`,
         [migrationSchema],
         'all',
       );
-      expect(authTable).toHaveLength(1);
-      const authUserId = crypto.randomUUID();
-      await migrationOrm.em.getConnection().execute(
-        `INSERT INTO "${migrationSchema}".auth_users (id, email, password_hash) VALUES (?, ?, ?)`,
-        [authUserId, 'migration-user@example.com', 'argon2id-test-hash'],
-        'run',
-      );
-      await expect(
-        migrationOrm.em.getConnection().execute(
-          `INSERT INTO "${migrationSchema}".auth_users (id, email, password_hash) VALUES (?, ?, ?)`,
-          [crypto.randomUUID(), 'migration-user@example.com', 'argon2id-test-hash'],
-          'run',
-        ),
-      ).rejects.toThrow();
+      expect(authTable).toHaveLength(0);
 
       await migrationOrm.migrator.down({ schema: migrationSchema, to: 0 });
       expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(0);
@@ -673,7 +622,7 @@ describe('Wagering Concurrency & Integration Tests', () => {
       expect(tablesAfterDown[0]?.count).toBe(0);
 
       await migrationOrm.migrator.up({ schema: migrationSchema });
-      expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(5);
+      expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(6);
     } finally {
       try {
         await migrationOrm.em.getConnection().execute(`DROP SCHEMA IF EXISTS "${migrationSchema}" CASCADE`);
@@ -785,9 +734,10 @@ describe('Wagering Concurrency & Integration Tests', () => {
     };
 
     await createUseCase().execute(command);
-    await expect(
-      createUseCase().execute({ ...command, payloadHash: 'different-payload-hash' }),
-    ).rejects.toBeInstanceOf(IdempotencyKeyConflictError);
+    await rejects(
+      async () => createUseCase().execute({ ...command, payloadHash: 'different-payload-hash' }),
+      IdempotencyKeyConflictError,
+    );
 
     const verifyEm = orm!.em.fork();
     const finalWallet = await new PostgresWalletRepository(verifyEm).findById(createdWallet.id);
@@ -1270,7 +1220,7 @@ describe('Wagering Concurrency & Integration Tests', () => {
             failNextAck = false;
             throw new Error('Simulated process loss after database commit');
           }
-          return sqsClient.send(command);
+          return command instanceof DeleteMessageCommand ? sqsClient.send(command) : sqsClient.send(command);
         },
       } as unknown as SQSClient;
       await new SqsWagerConsumerWorker(failingAckClient, orm!.em.fork()).handleMessage(firstMessage);
@@ -1310,6 +1260,105 @@ describe('Wagering Concurrency & Integration Tests', () => {
       sqsClient.destroy();
     }
   });
+
+  it('should survive SIGKILL after commit before ACK and recover in a new Bun process', async () => {
+    const sqs = createSqsClient();
+    let queueUrl: string | undefined;
+    const children: ReturnType<typeof spawn>[] = [];
+    const startWorker = (mode: string) => {
+      const child = spawn('bun', [fileURLToPath(new URL('../fixtures/sqs-crash-worker.ts', import.meta.url)), schemaName, queueUrl!, mode], {
+        env: { ...process.env, AWS_SQS_QUEUE_URL: queueUrl! },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      children.push(child);
+      let output = '';
+      let errors = '';
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveExit, reject) => {
+        child.once('error', reject);
+        child.once('exit', (code, signal) => resolveExit({ code, signal }));
+      });
+      const marker = new Promise<void>((resolveMarker, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Worker ${mode} timed out: ${errors}`)), 15000);
+        child.stdout!.on('data', (chunk: Buffer) => {
+          output += chunk.toString();
+          if (output.includes(mode === 'crash' ? 'COMMITTED_BEFORE_ACK' : 'WORKER_COMPLETED')) {
+            clearTimeout(timer);
+            resolveMarker();
+          }
+        });
+        child.stderr!.on('data', (chunk: Buffer) => { errors += chunk.toString(); });
+        child.once('exit', (code) => {
+          clearTimeout(timer);
+          if (!output.includes(mode === 'crash' ? 'COMMITTED_BEFORE_ACK' : 'WORKER_COMPLETED')) {
+            reject(new Error(`Worker ${mode} exited with ${code}: ${errors}`));
+          }
+        });
+      });
+      return { child, marker, exited };
+    };
+    try {
+      const created = await sqs.send(new CreateQueueCommand({
+        QueueName: `wager-sigkill-${crypto.randomUUID().replaceAll('-', '')}.fifo`,
+        Attributes: { FifoQueue: 'true', ContentBasedDeduplication: 'false', VisibilityTimeout: '2' },
+      }));
+      queueUrl = created.QueueUrl;
+      if (!queueUrl) throw new Error('Missing crash-test queue URL');
+      const playerId = crypto.randomUUID();
+      const wallet = await new CreateWalletUseCase(new PostgresUnitOfWork(orm!.em.fork())).execute({
+        playerId, initialBalance: { amount: '100.00', currency: 'BRL' },
+      });
+      const messageId = crypto.randomUUID();
+      const externalTransactionId = crypto.randomUUID();
+      await sqs.send(new SendMessageCommand({
+        QueueUrl: queueUrl,
+        MessageGroupId: wallet.id,
+        MessageDeduplicationId: messageId,
+        MessageBody: JSON.stringify({
+          messageId, type: 'WagerTransactionRequested', occurredAt: new Date().toISOString(),
+          data: { providerId: 'provider-crash', externalTransactionId, playerId, walletId: wallet.id,
+            roundId: 'crash-round', gameId: 'crash-game', kind: 'BET', money: { amount: '10.00', currency: 'BRL' } },
+        }),
+      }));
+      const first = startWorker('crash');
+      await first.marker;
+      const committed = await new PostgresWalletRepository(orm!.em.fork()).findById(wallet.id);
+      expect(committed?.balance.toString()).toBe('90.00');
+      const outboxCount = async () => {
+        const rows = await orm!.em.getConnection().execute<Array<{ count: number }>>(
+          `SELECT COUNT(*)::int AS count FROM "${schemaName}".outbox_messages WHERE aggregate_id = ?`, [wallet.id], 'all',
+        );
+        return rows[0]?.count;
+      };
+      const committedOutboxCount = await outboxCount();
+      first.child.kill('SIGKILL');
+      expect((await first.exited).signal).toBe('SIGKILL');
+      const second = startWorker('recover');
+      await second.marker;
+      expect((await second.exited).code).toBe(0);
+      expect(await orm!.em.fork().count(WagerTransactionOrmEntity, { externalTransactionId })).toBe(1);
+      expect(await orm!.em.fork().count(WalletLedgerEntryOrmEntity, { walletId: wallet.id })).toBe(2);
+      expect(await outboxCount()).toBe(committedOutboxCount);
+      const inbox = await orm!.em.getConnection().execute<Array<{ count: number }>>(
+        `SELECT COUNT(*)::int AS count FROM "${schemaName}".inbox_messages WHERE message_id = ? AND processed_at IS NOT NULL`, [messageId], 'all',
+      );
+      expect(inbox[0]?.count).toBe(1);
+      const reconciliation = await new ReconcileWalletUseCase(new PostgresUnitOfWork(orm!.em.fork())).execute(wallet.id);
+      expect(reconciliation.consistent).toBe(true);
+      expect(reconciliation.storedBalance.amount).toBe('90.00');
+      const remaining = await sqs.send(new ReceiveMessageCommand({ QueueUrl: queueUrl, WaitTimeSeconds: 1 }));
+      expect(remaining.Messages ?? []).toHaveLength(0);
+    } finally {
+      for (const child of children) {
+        if (child.exitCode === null && child.signalCode === null) {
+          const stopped = new Promise<void>((resolveStop) => child.once('exit', () => resolveStop()));
+          child.kill('SIGKILL');
+          await stopped;
+        }
+      }
+      if (queueUrl) await sqs.send(new DeleteQueueCommand({ QueueUrl: queueUrl }));
+      sqs.destroy();
+    }
+  }, 30000);
 
   it('should move a permanently malformed SQS message to the configured DLQ', async () => {
     const sqsClient = createSqsClient();
@@ -1475,7 +1524,7 @@ describe('Wagering Concurrency & Integration Tests', () => {
     try {
       const healthController = new HealthController(orm!.em.fork(), sqsClient);
       expect(healthController.live()).toEqual({ status: 'ok' });
-      await expect(healthController.ready()).resolves.toEqual({
+      expect(await healthController.ready()).toEqual({
         status: 'ok',
         checks: { postgres: 'ok', sqs: 'ok' },
       });

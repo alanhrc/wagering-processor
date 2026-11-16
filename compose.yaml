@@ -11,7 +11,7 @@ services:
     volumes:
       - ./.volumes/postgres:/var/lib/postgresql/data
     ports:
-      - '${DB_POSTGRES_HOST:-0.0.0.0}:${DB_POSTGRES_PORT:-5436}:5432'
+      - '${DB_POSTGRES_BIND_HOST:-127.0.0.1}:${DB_POSTGRES_PORT:-5436}:5432'
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${DB_POSTGRES_USER:-postgres} -d ${DB_POSTGRES_NAME:-wagering_db}']
       interval: 5s
@@ -48,3 +48,25 @@ services:
       - ./scripts/localstack:/scripts:ro
     entrypoint: ['/bin/bash', '-c']
     command: ['bash /scripts/init-sqs.sh']
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.2
+    restart: no
+    command: ['start-dev', '--import-realm']
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
+      KC_HEALTH_ENABLED: 'true'
+      KEYCLOAK_LOAD_CLIENT_SECRET: ${KEYCLOAK_LOAD_CLIENT_SECRET:?Set KEYCLOAK_LOAD_CLIENT_SECRET in .env}
+      KEYCLOAK_SWAGGER_REDIRECT_URI: ${KEYCLOAK_SWAGGER_REDIRECT_URI:-http://localhost:3000/docs/oauth2-redirect.html}
+      KEYCLOAK_API_ORIGIN: ${KEYCLOAK_API_ORIGIN:-http://localhost:3000}
+    ports:
+      - '127.0.0.1:${KEYCLOAK_PORT:-8080}:8080'
+    volumes:
+      - ./.volumes/keycloak:/opt/keycloak/data
+      - ./scripts/keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'bash -c "exec 3<>/dev/tcp/127.0.0.1/9000; printf ''GET /health/ready HTTP/1.0\r\n\r\n'' >&3; grep -q ''200'' <&3"']
+      interval: 5s
+      timeout: 5s
+      retries: 40

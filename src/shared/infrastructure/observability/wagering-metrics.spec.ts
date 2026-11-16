@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { WageringMetrics } from './wagering-metrics';
 import { WagerTransactionStatus } from '../../../modules/wagering/domain/entities/wager-transaction.entity';
 

@@ -20,7 +20,7 @@ interface HttpResult<T> {
 }
 
 interface AuthenticatedUser {
-  accessToken: string;
+  access_token: string;
 }
 
 interface WalletResponse {
@@ -68,7 +68,7 @@ let pendingReport: Record<string, unknown> | undefined;
 let pendingReportPath: string | undefined;
 
 function positiveInteger(name: string, fallback: number, maximum: number): number {
-  const raw = process.env[name];
+  const raw = process.env[name]?.trim() || undefined;
   const value = raw === undefined ? fallback : Number(raw);
   if (!Number.isInteger(value) || value < 1 || value > maximum) {
     throw new Error(`${name} must be an integer between 1 and ${maximum}`);
@@ -134,7 +134,7 @@ async function findFreePort(): Promise<number> {
 
 async function request<T>(url: string, init?: RequestInit): Promise<HttpResult<T>> {
   const startedAt = performance.now();
-  const response = await fetch(url, init);
+  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(30_000) });
   const text = await response.text();
   let body: unknown = text;
   try {
@@ -232,7 +232,6 @@ async function main(): Promise<void> {
     env: {
       ...process.env,
       PORT: String(port),
-      JWT_SECRET: randomUUID() + randomUUID(),
       DB_POSTGRES_SCHEMA: schemaName,
       AWS_SQS_QUEUE_URL: queues.wagersUrl,
       AWS_SQS_DLQ_QUEUE_URL: queues.deadLetterUrl,
@@ -243,17 +242,17 @@ async function main(): Promise<void> {
   });
   await waitForApplication(baseUrl, application);
 
-  const email = `load-${runId}@example.test`;
-  const password = `Load-test-${randomUUID()}!`;
-  const registration = await request<AuthenticatedUser>(`${baseUrl}/auth/register`, {
+  const issuer = process.env.OIDC_ISSUER;
+  const clientSecret = process.env.KEYCLOAK_LOAD_CLIENT_SECRET;
+  if (!issuer || !clientSecret) throw new Error('Configure OIDC_ISSUER and KEYCLOAK_LOAD_CLIENT_SECRET in .env');
+  const authentication = await request<AuthenticatedUser>(`${issuer}/protocol/openid-connect/token`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password }),
+    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: 'wagering-load', client_secret: clientSecret }),
   });
-  if (registration.status !== 201 || typeof registration.body.accessToken !== 'string') {
-    throw new Error(`Could not register load-test user: HTTP ${registration.status}`);
+  if (authentication.status !== 200 || typeof authentication.body.access_token !== 'string') {
+    throw new Error(`Keycloak client credentials authentication failed: HTTP ${authentication.status}`);
   }
-  const token = registration.body.accessToken;
+  const token = authentication.body.access_token;
   const playerId = randomUUID();
   const createdWallet = await request<WalletResponse>(`${baseUrl}/wallets`, {
     method: 'POST',
@@ -366,7 +365,7 @@ async function main(): Promise<void> {
       endpoint: 'POST /wagering/transactions',
       operation: 'BET of 0.01 BRL per request against one shared wallet opened at 1000.00 BRL',
       financialWrites: 'Each accepted request debits the wallet and appends one immutable ledger entry.',
-      authentication: 'One registered user and one JWT bearer token',
+      authentication: 'Keycloak service account using client_credentials and an RS256 access token',
       idempotency: 'Unique Idempotency-Key per measured request',
       requests,
       warmupRequests,

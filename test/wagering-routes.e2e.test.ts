@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, jest } from 'bun:test';
 import { INestApplication } from '@nestjs/common';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
@@ -22,18 +22,17 @@ import { WalletController } from '../src/modules/wagering/presentation/http/wall
 import { MetricsController } from '../src/modules/wagering/presentation/http/metrics.controller';
 import { WageringMetrics } from '../src/shared/infrastructure/observability/wagering-metrics';
 import { AuthController } from '../src/modules/authentication/presentation/http/auth.controller';
-import { AuthenticateUserUseCase, RegisterUserUseCase } from '../src/modules/authentication/application/authentication.use-cases';
 
 describe('Wagering HTTP routes (e2e)', () => {
   let app: INestApplication;
 
-  const createWallet = { execute: vi.fn() };
-  const reconcileWallet = { execute: vi.fn() };
-  const getWalletQueries = { getWallet: vi.fn(), getLedger: vi.fn() };
-  const processWager = { execute: vi.fn() };
-  const getWagerTransaction = { byId: vi.fn(), byExternalId: vi.fn() };
-  const postgresConnection = { execute: vi.fn() };
-  const sqsClient = { send: vi.fn() };
+  const createWallet = { execute: jest.fn() };
+  const reconcileWallet = { execute: jest.fn() };
+  const getWalletQueries = { getWallet: jest.fn(), getLedger: jest.fn() };
+  const processWager = { execute: jest.fn() };
+  const getWagerTransaction = { byId: jest.fn(), byExternalId: jest.fn() };
+  const postgresConnection = { execute: jest.fn() };
+  const sqsClient = { send: jest.fn() };
 
   beforeAll(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -47,8 +46,6 @@ describe('Wagering HTTP routes (e2e)', () => {
         { provide: EntityManager, useValue: { config: { getSchema: () => undefined }, getConnection: () => postgresConnection } },
         { provide: SQSClient, useValue: sqsClient },
         WageringMetrics,
-        { provide: RegisterUserUseCase, useValue: { execute: vi.fn() } },
-        { provide: AuthenticateUserUseCase, useValue: { execute: vi.fn() } },
       ],
     }).compile();
 
@@ -57,7 +54,7 @@ describe('Wagering HTTP routes (e2e)', () => {
   });
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    jest.clearAllMocks();
   });
 
   afterAll(async () => {

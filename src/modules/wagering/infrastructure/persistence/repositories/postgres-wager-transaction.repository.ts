@@ -1,7 +1,7 @@
 import { EntityManager } from '@mikro-orm/core';
 import { IWagerTransactionRepository } from '../../../domain/ports/wagering.repository.interface';
 import { WagerTransaction } from '../../../domain/entities/wager-transaction.entity';
-import { WagerTransactionKind, WagerTransactionStatus } from '../../../domain/entities/wager-transaction.entity';
+import { FailureCode, WagerTransactionKind, WagerTransactionStatus } from '../../../domain/entities/wager-transaction.entity';
 import { WagerTransactionOrmEntity } from '../entities/wager-transaction.orm-entity';
 import { Money } from '../../../../../shared/domain/value-objects/money';
 
@@ -77,13 +77,13 @@ export class PostgresWagerTransactionRepository implements IWagerTransactionRepo
       playerId: ormEntity.playerId,
       roundId: ormEntity.roundId,
       gameId: ormEntity.gameId,
-      kind: ormEntity.kind as any,
+      kind: ormEntity.kind as WagerTransactionKind,
       money: Money.from({ amount: ormEntity.amount, currency: ormEntity.currency }),
       referenceExternalTransactionId: ormEntity.referenceExternalTransactionId,
       createdAt: ormEntity.createdAt,
-      status: ormEntity.status as any,
+      status: ormEntity.status as WagerTransactionStatus,
       referenceTransactionId: ormEntity.referenceTransactionId,
-      failureCode: ormEntity.failureCode as any,
+      failureCode: ormEntity.failureCode as FailureCode | undefined,
       processedAt: ormEntity.processedAt,
       attempts: ormEntity.attempts,
       nextAttemptAt: ormEntity.nextAttemptAt,
