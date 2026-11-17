@@ -27,7 +27,7 @@ The opening balance is represented by an internal `OPENING` transaction and a cr
 
 The required `Idempotency-Key` is stored persistently. The payload hash is SHA-256 over canonical JSON with recursively sorted keys and only business fields; transport headers are excluded. A repeated key with the same hash returns the stored result. A repeated key with a different hash is a conflict. PostgreSQL uniqueness and transaction-scoped advisory locking coordinate concurrent requests across processes.
 
-The persisted result balance allows a replay to return the original observed balance rather than a later wallet balance.
+The persisted result balance and its own currency allow a replay to return the original observed wallet balance rather than a later balance. A rejected request can have a different currency from the wallet; its result snapshot still belongs to the wallet currency. Migration20261121000000 adds the snapshot currency and backfills it for previously stored snapshots. Legacy rejections without a snapshot cannot recover a historical balance from this migration.
 
 ## Reversals and out-of-order references
 

@@ -154,7 +154,7 @@ export class WagerTransaction {
   get resultBalance(): Money | undefined { return this._resultBalance; }
 
   public recordResultBalance(balance: Money): void {
-    if (balance.currency !== this.money.currency) {
+    if (balance.currency !== this.money.currency && this._status !== WagerTransactionStatus.Rejected) {
       throw new Error('Result balance currency must match transaction currency');
     }
     this._resultBalance = balance;

@@ -19,6 +19,7 @@ import { Migration20261115000000 } from '../../src/modules/wagering/infrastructu
 import { Migration20261116000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261116000000';
 import { Migration20261117000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261117000000';
 import { Migration20261118000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261118000000';
+import { Migration20261121000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261121000000';
 import { Migration20261120000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261120000000';
 import { Migration20261119000000 } from '../../src/modules/wagering/infrastructure/persistence/migrations/Migration20261119000000';
 
@@ -75,6 +76,7 @@ describe('Wagering Concurrency & Integration Tests', () => {
           Migration20261118000000,
           Migration20261119000000,
           Migration20261120000000,
+          Migration20261121000000,
         ],
       },
     });
@@ -351,6 +353,12 @@ describe('Wagering Concurrency & Integration Tests', () => {
     expect(result.status).toBe(WagerTransactionStatus.Rejected);
     expect(result.failureCode).toBe(FailureCode.CurrencyMismatch);
     expect(result.balance).toEqual({ amount: '100.00', currency: 'BRL' });
+    await createUseCase().execute({
+      providerId: 'provider-a', externalTransactionId: crypto.randomUUID(),
+      idempotencyKey: crypto.randomUUID(), payloadHash: 'later-valid-bet',
+      walletId: wallet.id, playerId, roundId: 'later-round', gameId: 'slot-hot',
+      kind: WagerTransactionKind.Bet, money: { amount: '10.00', currency: 'BRL' },
+    });
     const replay = await createUseCase().execute({
       providerId: 'provider-a',
       externalTransactionId,
@@ -367,8 +375,8 @@ describe('Wagering Concurrency & Integration Tests', () => {
     expect(replay.balance).toEqual({ amount: '100.00', currency: 'BRL' });
     const verifyEm = orm!.em.fork();
     const finalWallet = await new PostgresWalletRepository(verifyEm).findById(wallet.id);
-    expect(finalWallet?.balance.toString()).toBe('100.00');
-    expect(await verifyEm.count(WalletLedgerEntryOrmEntity, { walletId: wallet.id })).toBe(1);
+    expect(finalWallet?.balance.toString()).toBe('90.00');
+    expect(await verifyEm.count(WalletLedgerEntryOrmEntity, { walletId: wallet.id })).toBe(2);
   });
 
   it('should reject a rollback that would make the wallet balance negative with a distinct failure code', async () => {
@@ -603,7 +611,7 @@ describe('Wagering Concurrency & Integration Tests', () => {
     try {
       await migrationOrm.em.getConnection().execute(`CREATE SCHEMA "${migrationSchema}"`);
       await migrationOrm.migrator.up({ schema: migrationSchema });
-      expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(6);
+      expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(7);
       const authTable = await migrationOrm.em.getConnection().execute<Array<{ table_name: string }>>(
         `SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'auth_users'`,
         [migrationSchema],
@@ -622,7 +630,7 @@ describe('Wagering Concurrency & Integration Tests', () => {
       expect(tablesAfterDown[0]?.count).toBe(0);
 
       await migrationOrm.migrator.up({ schema: migrationSchema });
-      expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(6);
+      expect(await migrationOrm.migrator.getExecuted({ schema: migrationSchema })).toHaveLength(7);
     } finally {
       try {
         await migrationOrm.em.getConnection().execute(`DROP SCHEMA IF EXISTS "${migrationSchema}" CASCADE`);

@@ -302,9 +302,7 @@ export class ProcessWagerTransactionUseCase {
     eventContext: EventContext,
     idempotentReplay: boolean,
   ): Promise<ProcessWagerResult> {
-    if (balance.currency === transaction.money.currency) {
-      transaction.recordResultBalance(balance);
-    }
+    transaction.recordResultBalance(balance);
     await repositories.wagers.save(transaction);
     if (transaction.status === WagerTransactionStatus.Rejected) {
       await repositories.outbox.enqueue(WagerTransactionRejected.from(transaction, eventContext));

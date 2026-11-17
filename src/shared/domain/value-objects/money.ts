@@ -34,7 +34,7 @@ export class Money {
     const absoluteCents = BigInt(majorPart.replace('-', '')) * 100n + BigInt(minorPart.padEnd(2, '0'));
     const totalCents = trimmed.startsWith('-') ? -absoluteCents : absoluteCents;
 
-    if (!props.currency || props.currency.trim().length !== 3) {
+    if (typeof props.currency !== 'string' || !/^[A-Za-z]{3}$/.test(props.currency.trim())) {
       throw new InvalidMoneyError('Invalid currency: must be a 3-letter ISO-4217 code');
     }
 
@@ -42,7 +42,7 @@ export class Money {
   }
 
   static zero(currency: string): Money {
-    return new Money(0n, currency);
+    return Money.from({ amount: '0.00', currency });
   }
 
   public add(other: Money): Money {

@@ -88,7 +88,7 @@ export class PostgresWagerTransactionRepository implements IWagerTransactionRepo
       attempts: ormEntity.attempts,
       nextAttemptAt: ormEntity.nextAttemptAt,
       resultBalance: ormEntity.resultBalance
-        ? Money.from({ amount: ormEntity.resultBalance, currency: ormEntity.currency })
+        ? Money.from({ amount: ormEntity.resultBalance, currency: ormEntity.resultBalanceCurrency ?? ormEntity.currency })
         : undefined,
     });
   }
@@ -119,6 +119,7 @@ export class PostgresWagerTransactionRepository implements IWagerTransactionRepo
         attempts: transaction.attempts,
         nextAttemptAt: transaction.nextAttemptAt,
         resultBalance: transaction.resultBalance?.toString() ?? null,
+        resultBalanceCurrency: transaction.resultBalance?.currency ?? null,
       });
       this.em.persist(ormEntity);
     } else {
@@ -129,6 +130,7 @@ export class PostgresWagerTransactionRepository implements IWagerTransactionRepo
       ormEntity.attempts = transaction.attempts;
       ormEntity.nextAttemptAt = transaction.nextAttemptAt;
       ormEntity.resultBalance = transaction.resultBalance?.toString() ?? null;
+      ormEntity.resultBalanceCurrency = transaction.resultBalance?.currency ?? null;
     }
 
     await this.em.flush();

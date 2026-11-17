@@ -65,4 +65,7 @@ export class WagerTransactionOrmEntity {
 
   @Property({ fieldName: 'result_balance', type: 'numeric', precision: 15, scale: 2, nullable: true })
   resultBalance?: string | null;
+
+  @Property({ fieldName: 'result_balance_currency', type: 'string', length: 3, nullable: true })
+  resultBalanceCurrency?: string | null;
 }

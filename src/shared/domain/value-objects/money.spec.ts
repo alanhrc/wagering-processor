@@ -50,4 +50,19 @@ describe('Money Value Object (BigInt-based)', () => {
     const m2 = Money.from({ amount: '10.00', currency: 'USD' });
     expect(() => m1.add(m2)).toThrow();
   });
+
+  it('rejects non-finite, scientific and over-precision amounts', () => {
+    for (const amount of ['NaN', 'Infinity', '-Infinity', '1e3', '1.001']) {
+      expect(() => Money.from({ amount, currency: 'BRL' })).toThrow();
+    }
+  });
+
+  it('rejects malformed currency codes and normalizes zero through the same validation', () => {
+    for (const currency of ['', '12!', '123', 'BRAZ', 'B$L']) {
+      expect(() => Money.from({ amount: '1.00', currency })).toThrow();
+      expect(() => Money.zero(currency)).toThrow();
+    }
+    expect(Money.zero(' brl ').toJSON()).toEqual({ amount: '0.00', currency: 'BRL' });
+  });
+
 });
